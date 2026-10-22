@@ -1,41 +1,41 @@
 "use server";
 import { redirect } from "next/navigation";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { audit } from "@/lib/audit";
 import { requireWriter } from "@/lib/perm";
-import { formObj, parseDate } from "@/lib/format";
+import { formObj, parseDate, todayStr } from "@/lib/format";
+import { applyFlowmeter, reverseFlowmeter, StockError, type FlowInput } from "@/lib/stock";
 
-const create = z.object({
-  code: z.string().max(60).optional(),
-  quantity: z.coerce.number().int().min(1, "Quantidade deve ser ao menos 1.").default(1),
-  state: z.enum(["HOSPITAL", "DOMICILIO", "MANUTENCAO", "INDISPONIVEL"]),
-  lastCheck: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  notes: z.string().optional(),
+const MAP: Record<string, Pick<FlowInput, "operation" | "from" | "to">> = {
+  ADD_HOSPITAL: { operation: "ENTRADA", to: "HOSPITAL" }, ADD_DOMICILIO: { operation: "ENTRADA", to: "DOMICILIO" },
+  HOSP_DOM: { operation: "ENVIO_DOMICILIO", from: "HOSPITAL", to: "DOMICILIO" }, DOM_HOSP: { operation: "RETORNO_DOMICILIO", from: "DOMICILIO", to: "HOSPITAL" },
+  BAIXA_HOSPITAL: { operation: "BAIXA", from: "HOSPITAL" }, BAIXA_DOMICILIO: { operation: "BAIXA", from: "DOMICILIO" },
+};
+const schema = z.object({
+  kind: z.enum(["ADD_HOSPITAL", "ADD_DOMICILIO", "HOSP_DOM", "DOM_HOSP", "BAIXA_HOSPITAL", "BAIXA_DOMICILIO"]),
+  occurredAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Informe a data."),
+  quantity: z.coerce.number({ invalid_type_error: "Informe a quantidade." }).int().min(1, "Quantidade deve ser maior que zero.").max(100000),
+  responsibleName: z.string().min(2, "Informe o responsável."),
+  notes: z.string().max(500).optional(), requestKey: z.string().max(80).optional(),
 });
+const done = (msg: string | null, dup = false): never => redirect(msg ? `/fluxometros?erro=${encodeURIComponent(msg)}` : `/fluxometros?ok=${dup ? "dup" : "1"}`);
 
-// Cadastro inicial. Mudanças de local acontecem por movimentação (Etapa 3), para não contar o mesmo item 2x.
-export async function createFlowmeter(fd: FormData) {
+export async function registerFlowmeter(fd: FormData) {
   const user = await requireWriter();
-  const p = create.safeParse(formObj(fd));
-  if (!p.success) redirect(`/fluxometros?erro=${encodeURIComponent(p.error.issues[0].message)}`);
-  const { code, lastCheck, ...rest } = p.data;
-  if (code && (await db.flowmeter.findUnique({ where: { code } })))
-    redirect(`/fluxometros?erro=${encodeURIComponent("Este patrimônio já está cadastrado.")}`);
-  const f = await db.flowmeter.create({ data: { ...rest, code: code ?? null, quantity: code ? 1 : rest.quantity, lastCheck: lastCheck ? parseDate(lastCheck) : null } });
-  await audit({ userId: user.id, action: "FLUXOMETRO_CRIADO", entity: "Flowmeter", entityId: f.id, after: f });
-  redirect("/fluxometros?ok=1");
+  const p = schema.safeParse(formObj(fd));
+  if (!p.success) return done(p.error.issues[0].message);
+  const d = p.data;
+  if (d.occurredAt > todayStr()) return done("A data não pode ser futura.");
+  if (d.kind.startsWith("BAIXA") && !d.notes) return done("Informe o motivo da baixa.");
+  let msg: string | null = null; let dup = false;
+  try { dup = (await applyFlowmeter({ ...MAP[d.kind], quantity: d.quantity, occurredAt: parseDate(d.occurredAt), responsibleName: d.responsibleName, notes: d.notes, requestKey: d.requestKey, userId: user.id })).duplicate; }
+  catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
+  return done(msg, dup);
 }
 
-export async function updateFlowmeterInfo(fd: FormData) {
+export async function reverseFlowmeterMovement(fd: FormData) {
   const user = await requireWriter();
-  const id = String(fd.get("id"));
-  const lc = String(fd.get("lastCheck") ?? "");
-  const before = await db.flowmeter.findUnique({ where: { id } });
-  if (!before) redirect("/fluxometros");
-  const after = await db.flowmeter.update({ where: { id }, data: {
-    lastCheck: /^\d{4}-\d{2}-\d{2}$/.test(lc) ? parseDate(lc) : before.lastCheck,
-    notes: String(fd.get("notes") ?? "").trim() || null } });
-  await audit({ userId: user.id, action: "FLUXOMETRO_EDITADO", entity: "Flowmeter", entityId: id, before, after });
-  redirect("/fluxometros?ok=1");
+  let msg: string | null = null;
+  try { await reverseFlowmeter({ id: String(fd.get("id")), reason: String(fd.get("reason") ?? ""), userId: user.id, userName: user.name }); }
+  catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
+  return done(msg);
 }

@@ -1,17 +1,61 @@
-generator client { provider = "prisma-client-js" }
+generator client {
+  provider = "prisma-client-js"
+}
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
-enum Role { ADMIN OPERADOR CONSULTA }
-enum CylinderSize { P M G }
-enum MovementKind { ENTRADA SAIDA TRANSFERENCIA ENVIO_TROCA RETORNO AJUSTE }
-enum MovementStatus { RASCUNHO CONFIRMADA ESTORNADA }
-enum CylinderStatus { DISPONIVEL EM_USO EM_TROCA MANUTENCAO BAIXADO }
-enum FlowmeterState { HOSPITAL DOMICILIO MANUTENCAO INDISPONIVEL }
-enum RecordStatus { ATIVO INATIVO }
+enum Role {
+  ADMIN
+  OPERADOR
+  CONSULTA
+}
+
+enum CylinderSize {
+  P
+  M
+  G
+}
+
+enum MovementStatus {
+  RASCUNHO
+  CONFIRMADA
+  ESTORNADA
+}
+
+enum RecordStatus {
+  ATIVO
+  INATIVO
+}
+
+enum StockCondition {
+  CHEIO
+  VAZIO
+  INDISPONIVEL
+}
+enum StockOperation {
+  ENTRADA_INICIAL
+  ABASTECIMENTO
+  ENTREGA_DOMICILIAR
+  RECOLHIMENTO_DOMICILIAR
+  ENVIO_FORNECEDOR
+  RETORNO_FORNECEDOR
+  BAIXA_INDISPONIVEL
+  RETORNO_DISPONIVEL
+}
+enum FlowmeterLocation {
+  HOSPITAL
+  DOMICILIO
+}
+
+enum FlowmeterOperation {
+  ENTRADA
+  ENVIO_DOMICILIO
+  RETORNO_DOMICILIO
+  BAIXA
+}
 
 model User {
   id          String   @id @default(cuid())
@@ -38,12 +82,15 @@ model Session {
   @@index([userId])
 }
 
+// HOSPITAL, DOMICILIO e TRANSPORTE (exibido como "Com o fornecedor")
 model Location {
   id        String  @id @default(cuid())
-  code      String  @unique   // HOSPITAL, DOMICILIO, TRANSPORTE...
+  code      String  @unique
   name      String
   active    Boolean @default(true)
   balances  StockBalance[]
+  movementsFrom StockMovement[] @relation("MovFrom")
+  movementsTo   StockMovement[] @relation("MovTo")
 }
 
 model CylinderType {
@@ -51,73 +98,48 @@ model CylinderType {
   size  CylinderSize @unique
   label String
   capacityLiters Decimal? @db.Decimal(8,2)
-  balances StockBalance[]
+  balances  StockBalance[]
+  movements StockMovement[]
 }
 
-// Saldo por quantidade: só alterado ao CONFIRMAR movimentação (dentro de transação)
+// Saldo por quantidade (tamanho x local x estado). Só muda dentro de transação ao registrar movimentação.
 model StockBalance {
   locationId     String
   cylinderTypeId String
+  condition      StockCondition
   quantity       Int @default(0)
   location       Location     @relation(fields: [locationId], references: [id])
   cylinderType   CylinderType @relation(fields: [cylinderTypeId], references: [id])
-  @@id([locationId, cylinderTypeId])
+  @@id([locationId, cylinderTypeId, condition])
 }
 
-// Cilindros com identificação individual (opcional)
-model Cylinder {
-  id             String         @id @default(cuid())
-  code           String         @unique
-  cylinderTypeId String
-  locationId     String
-  status         CylinderStatus @default(DISPONIVEL)
-  lastMovementAt DateTime?
-  notes          String?
-  movements      StockMovement[]
-  @@index([locationId])
-}
-
+// Livro-razão: registros confirmados nunca são apagados; correção = estorno com justificativa.
 model StockMovement {
   id             String         @id @default(cuid())
-  kind           MovementKind
-  status         MovementStatus @default(RASCUNHO)
+  operation      StockOperation
+  status         MovementStatus @default(CONFIRMADA)
   cylinderTypeId String
+  cylinderType   CylinderType   @relation(fields: [cylinderTypeId], references: [id])
   quantity       Int
   fromLocationId String?
+  fromLocation   Location?      @relation("MovFrom", fields: [fromLocationId], references: [id])
+  fromCondition  StockCondition?
   toLocationId   String?
-  cylinderId     String?
-  cylinder       Cylinder?      @relation(fields: [cylinderId], references: [id])
-  supplyId       String?
-  supply         Supply?        @relation(fields: [supplyId], references: [id])
-  exchangeId     String?
-  exchange       HomeExchange?  @relation(fields: [exchangeId], references: [id])
+  toLocation     Location?      @relation("MovTo", fields: [toLocationId], references: [id])
+  toCondition    StockCondition?
+  occurredAt     DateTime
+  supplier       String?
+  patientId      String?
+  patient        Patient?       @relation(fields: [patientId], references: [id])
+  responsibleName String
+  notes          String?
+  requestKey     String?        @unique
   reversalOfId   String?        @unique
-  negativeOverrideReason String?
-  notes          String?
+  reversalReason String?
   createdById    String
-  confirmedById  String?
   createdAt      DateTime       @default(now())
-  confirmedAt    DateTime?
-  @@index([status, createdAt])
-  @@index([cylinderTypeId])
-}
-
-model Supply {
-  id             String   @id @default(cuid())
-  supplyDate     DateTime
-  receivedBy     String
-  emptiesSent    Int      @default(0)
-  receivedTotal  Int      @default(0)
-  oxygenType     String?
-  qtyP           Int      @default(0)
-  qtyM           Int      @default(0)
-  qtyG           Int      @default(0)
-  notes          String?
-  confirmed      Boolean  @default(false)
-  createdById    String
-  createdAt      DateTime @default(now())
-  movements      StockMovement[]
-  @@index([supplyDate])
+  @@index([operation, occurredAt])
+  @@index([patientId, occurredAt])
 }
 
 model Patient {
@@ -125,8 +147,8 @@ model Patient {
   fullName      String
   phone         String?
   address       String
-  neighborhood  String?      // Bairro
-  village       String?      // Povoado
+  neighborhood  String?
+  village       String?
   reference     String?
   cylinderSize  CylinderSize?
   cylinderQty   Int          @default(0)
@@ -138,53 +160,33 @@ model Patient {
   responsibleId String?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
-  exchanges     HomeExchange[]
+  movements     StockMovement[]
   @@index([fullName])
   @@index([neighborhood])
   @@index([village])
 }
 
-model HomeExchange {
-  id           String       @id @default(cuid())
-  patientId    String
-  patient      Patient      @relation(fields: [patientId], references: [id])
-  exchangeDate DateTime
-  cylinderSize CylinderSize
-  delivered    Int          @default(0)
-  collected    Int          @default(0)
-  flow         String?
-  responsibleName String
-  notes        String?
-  confirmed    Boolean      @default(false)
-  createdById  String
-  createdAt    DateTime     @default(now())
-  movements    StockMovement[]
-  @@index([patientId, exchangeDate])
-}
-
-// Fluxômetro individual (code preenchido, quantity=1) ou lote (code nulo, quantity=N)
-model Flowmeter {
-  id        String         @id @default(cuid())
-  code      String?        @unique
-  quantity  Int            @default(1)
-  state     FlowmeterState @default(HOSPITAL)
-  notes     String?
-  lastCheck DateTime?
-  movements FlowmeterMovement[]
-  @@index([state])
+model FlowmeterBalance {
+  location FlowmeterLocation @id
+  quantity Int @default(0)
 }
 
 model FlowmeterMovement {
-  id          String         @id @default(cuid())
-  flowmeterId String
-  flowmeter   Flowmeter      @relation(fields: [flowmeterId], references: [id])
-  quantity    Int
-  fromState   FlowmeterState
-  toState     FlowmeterState
-  patientId   String?
-  notes       String?
-  createdById String
-  createdAt   DateTime       @default(now())
+  id              String             @id @default(cuid())
+  operation       FlowmeterOperation
+  status          MovementStatus     @default(CONFIRMADA)
+  quantity        Int
+  fromLocation    FlowmeterLocation?
+  toLocation      FlowmeterLocation?
+  occurredAt      DateTime
+  responsibleName String
+  notes           String?
+  requestKey      String?            @unique
+  reversalOfId    String?            @unique
+  reversalReason  String?
+  createdById     String
+  createdAt       DateTime           @default(now())
+  @@index([occurredAt])
 }
 
 model IssuedReport {
@@ -195,7 +197,6 @@ model IssuedReport {
   issuedAt  DateTime @default(now())
 }
 
-// Somente inserção. Em produção, revogar UPDATE/DELETE do usuário da aplicação.
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String?

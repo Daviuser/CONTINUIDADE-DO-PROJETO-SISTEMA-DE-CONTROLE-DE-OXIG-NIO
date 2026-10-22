@@ -5,3 +5,6 @@ export const parseDate = (v: string) => new Date(v + "T12:00:00.000Z");
 // Converte FormData em objeto, trocando campos vazios por undefined
 export const formObj = (fd: FormData) =>
   Object.fromEntries([...fd.entries()].filter(([k]) => !k.startsWith("$ACTION")).map(([k, v]) => [k, typeof v === "string" && v.trim() === "" ? undefined : typeof v === "string" ? v.trim() : v]));
+// Data de hoje (AAAA-MM-DD) no fuso da Bahia
+export const todayStr = () => new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Bahia" }).format(new Date());
+export const okDate = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v);

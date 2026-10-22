@@ -11,8 +11,14 @@ export const dynamic = "force-dynamic";
 export default async function Paciente({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ erro?: string; ok?: string }> }) {
   const user = await requireUser();
   const { id } = await params; const { erro, ok } = await searchParams;
-  const p = await db.patient.findUnique({ where: { id }, include: { exchanges: { orderBy: { exchangeDate: "desc" }, take: 50 } } });
+  const p = await db.patient.findUnique({ where: { id } });
   if (!p) notFound();
+  const [moves, tot] = await Promise.all([
+    db.stockMovement.findMany({ where: { patientId: id }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 50, include: { cylinderType: true } }),
+    db.stockMovement.groupBy({ by: ["operation"], where: { patientId: id, status: "CONFIRMADA", reversalOfId: null }, _sum: { quantity: true } }),
+  ]);
+  const delivered = tot.find(t => t.operation === "ENTREGA_DOMICILIAR")?._sum.quantity ?? 0;
+  const collected = tot.find(t => t.operation === "RECOLHIMENTO_DOMICILIAR")?._sum.quantity ?? 0;
   const history = await db.auditLog.findMany({ where: { entity: "Patient", entityId: id }, orderBy: { at: "desc" }, take: 50 });
   const writer = user.role !== "CONSULTA";
   return (
@@ -33,11 +39,12 @@ export default async function Paciente({ params, searchParams }: { params: Promi
             <button className={btnCls}>Reativar acompanhamento</button></>)}
           <p className="text-xs text-neutral-500 w-full">O histórico do paciente é sempre preservado.</p>
         </form>)}
-      <section><h2 className="font-semibold mb-2">Histórico de trocas</h2>
+      <section><h2 className="font-semibold mb-2">Histórico de entregas e recolhimentos</h2>
+        <p className="text-sm text-neutral-600 mb-2">Registrados no sistema: {delivered} entregue(s) · {collected} recolhido(s). Registre novas operações em “Entregas e recolhimentos”.</p>
         <div className="bg-white border rounded-xl overflow-x-auto"><table className="w-full text-sm">
-          <thead className="bg-verde-50 text-left"><tr>{["Data", "Tipo", "Entregues", "Recolhidos", "Fluxo", "Responsável"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
-          <tbody>{p.exchanges.map(e => <tr key={e.id} className="border-t"><td className="p-2">{fmtDate(e.exchangeDate)}</td><td className="p-2">{e.cylinderSize}</td><td className="p-2">{e.delivered}</td><td className="p-2">{e.collected}</td><td className="p-2">{e.flow ?? "—"}</td><td className="p-2">{e.responsibleName}</td></tr>)}
-            {!p.exchanges.length && <tr><td colSpan={6} className="p-3 text-neutral-500">Nenhuma troca registrada.</td></tr>}</tbody></table></div></section>
+          <thead className="bg-verde-50 text-left"><tr>{["Data", "Operação", "Categoria", "Qtd.", "Responsável", "Situação"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
+          <tbody>{moves.map(m => <tr key={m.id} className={"border-t " + (m.status === "ESTORNADA" ? "text-neutral-400 line-through" : "")}><td className="p-2">{fmtDate(m.occurredAt)}</td><td className="p-2">{m.operation === "ENTREGA_DOMICILIAR" ? "Entrega" : "Recolhimento"}{m.reversalOfId && " (estorno)"}</td><td className="p-2">{m.cylinderType.size}</td><td className="p-2">{m.quantity}</td><td className="p-2">{m.responsibleName}</td><td className="p-2">{m.status === "ESTORNADA" ? "Estornada" : "Confirmada"}</td></tr>)}
+            {!moves.length && <tr><td colSpan={6} className="p-3 text-neutral-500">Nenhuma movimentação registrada.</td></tr>}</tbody></table></div></section>
       <section><h2 className="font-semibold mb-2">Histórico de alterações</h2>
         <ul className="bg-white border rounded-xl divide-y text-sm">{history.map(h => (
           <li key={h.id} className="p-2">{fmtDateTime(h.at)} — {h.action.replaceAll("_", " ").toLowerCase()}{h.reason && <> · motivo: {h.reason}</>}</li>))}
