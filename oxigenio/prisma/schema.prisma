@@ -1,0 +1,211 @@
+generator client { provider = "prisma-client-js" }
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role { ADMIN OPERADOR CONSULTA }
+enum CylinderSize { P M G }
+enum MovementKind { ENTRADA SAIDA TRANSFERENCIA ENVIO_TROCA RETORNO AJUSTE }
+enum MovementStatus { RASCUNHO CONFIRMADA ESTORNADA }
+enum CylinderStatus { DISPONIVEL EM_USO EM_TROCA MANUTENCAO BAIXADO }
+enum FlowmeterState { HOSPITAL DOMICILIO MANUTENCAO INDISPONIVEL }
+enum RecordStatus { ATIVO INATIVO }
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  jobTitle    String?
+  passwordHash String
+  role        Role     @default(CONSULTA)
+  active      Boolean  @default(true)
+  failedLogins Int     @default(0)
+  lockedUntil DateTime?
+  createdAt   DateTime @default(now())
+  sessions    Session[]
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  @@index([userId])
+}
+
+model Location {
+  id        String  @id @default(cuid())
+  code      String  @unique   // HOSPITAL, DOMICILIO, TRANSPORTE...
+  name      String
+  active    Boolean @default(true)
+  balances  StockBalance[]
+}
+
+model CylinderType {
+  id    String       @id @default(cuid())
+  size  CylinderSize @unique
+  label String
+  capacityLiters Decimal? @db.Decimal(8,2)
+  balances StockBalance[]
+}
+
+// Saldo por quantidade: só alterado ao CONFIRMAR movimentação (dentro de transação)
+model StockBalance {
+  locationId     String
+  cylinderTypeId String
+  quantity       Int @default(0)
+  location       Location     @relation(fields: [locationId], references: [id])
+  cylinderType   CylinderType @relation(fields: [cylinderTypeId], references: [id])
+  @@id([locationId, cylinderTypeId])
+}
+
+// Cilindros com identificação individual (opcional)
+model Cylinder {
+  id             String         @id @default(cuid())
+  code           String         @unique
+  cylinderTypeId String
+  locationId     String
+  status         CylinderStatus @default(DISPONIVEL)
+  lastMovementAt DateTime?
+  notes          String?
+  movements      StockMovement[]
+  @@index([locationId])
+}
+
+model StockMovement {
+  id             String         @id @default(cuid())
+  kind           MovementKind
+  status         MovementStatus @default(RASCUNHO)
+  cylinderTypeId String
+  quantity       Int
+  fromLocationId String?
+  toLocationId   String?
+  cylinderId     String?
+  cylinder       Cylinder?      @relation(fields: [cylinderId], references: [id])
+  supplyId       String?
+  supply         Supply?        @relation(fields: [supplyId], references: [id])
+  exchangeId     String?
+  exchange       HomeExchange?  @relation(fields: [exchangeId], references: [id])
+  reversalOfId   String?        @unique
+  negativeOverrideReason String?
+  notes          String?
+  createdById    String
+  confirmedById  String?
+  createdAt      DateTime       @default(now())
+  confirmedAt    DateTime?
+  @@index([status, createdAt])
+  @@index([cylinderTypeId])
+}
+
+model Supply {
+  id             String   @id @default(cuid())
+  supplyDate     DateTime
+  receivedBy     String
+  emptiesSent    Int      @default(0)
+  receivedTotal  Int      @default(0)
+  oxygenType     String?
+  qtyP           Int      @default(0)
+  qtyM           Int      @default(0)
+  qtyG           Int      @default(0)
+  notes          String?
+  confirmed      Boolean  @default(false)
+  createdById    String
+  createdAt      DateTime @default(now())
+  movements      StockMovement[]
+  @@index([supplyDate])
+}
+
+model Patient {
+  id            String       @id @default(cuid())
+  fullName      String
+  phone         String?
+  address       String
+  neighborhood  String?      // Bairro
+  village       String?      // Povoado
+  reference     String?
+  cylinderSize  CylinderSize?
+  cylinderQty   Int          @default(0)
+  flowLpm       String?
+  startDate     DateTime
+  endDate       DateTime?
+  status        RecordStatus @default(ATIVO)
+  notes         String?
+  responsibleId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  exchanges     HomeExchange[]
+  @@index([fullName])
+  @@index([neighborhood])
+  @@index([village])
+}
+
+model HomeExchange {
+  id           String       @id @default(cuid())
+  patientId    String
+  patient      Patient      @relation(fields: [patientId], references: [id])
+  exchangeDate DateTime
+  cylinderSize CylinderSize
+  delivered    Int          @default(0)
+  collected    Int          @default(0)
+  flow         String?
+  responsibleName String
+  notes        String?
+  confirmed    Boolean      @default(false)
+  createdById  String
+  createdAt    DateTime     @default(now())
+  movements    StockMovement[]
+  @@index([patientId, exchangeDate])
+}
+
+// Fluxômetro individual (code preenchido, quantity=1) ou lote (code nulo, quantity=N)
+model Flowmeter {
+  id        String         @id @default(cuid())
+  code      String?        @unique
+  quantity  Int            @default(1)
+  state     FlowmeterState @default(HOSPITAL)
+  notes     String?
+  lastCheck DateTime?
+  movements FlowmeterMovement[]
+  @@index([state])
+}
+
+model FlowmeterMovement {
+  id          String         @id @default(cuid())
+  flowmeterId String
+  flowmeter   Flowmeter      @relation(fields: [flowmeterId], references: [id])
+  quantity    Int
+  fromState   FlowmeterState
+  toState     FlowmeterState
+  patientId   String?
+  notes       String?
+  createdById String
+  createdAt   DateTime       @default(now())
+}
+
+model IssuedReport {
+  id        String   @id @default(cuid())
+  type      String
+  params    Json
+  issuedById String
+  issuedAt  DateTime @default(now())
+}
+
+// Somente inserção. Em produção, revogar UPDATE/DELETE do usuário da aplicação.
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  reason    String?
+  at        DateTime @default(now())
+  @@index([entity, entityId])
+  @@index([at])
+}
