@@ -20,17 +20,17 @@ export default async function Trocas({ searchParams }: { searchParams: Promise<R
     <label className="text-sm">Fornecedor *<input name="supplier" list="sup" required className={inputCls} /></label></>;
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-semibold">Trocas com Fornecedores</h1>
+      <h1>Trocas com Fornecedores</h1>
       <Flash erro={sp.erro} ok={sp.ok} />
       <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {rows.map(r => <div key={r.size} className="bg-white border rounded-xl p-3"><p className="text-xs text-neutral-500">Vazios pendentes — {SIZE_LABEL[r.size]}</p><p className="text-2xl font-semibold text-laranja-600">{r.forn}</p></div>)}
-        <div className="bg-white border rounded-xl p-3"><p className="text-xs text-neutral-500">Total pendente</p><p className="text-2xl font-semibold">{totals.forn}</p></div>
+        {rows.map(r => <div key={r.size} className="card p-3"><p className="text-xs text-neutral-500">Vazios pendentes — {SIZE_LABEL[r.size]}</p><p className="text-2xl font-semibold text-laranja-600">{r.forn}</p></div>)}
+        <div className="card p-3"><p className="text-xs text-neutral-500">Total pendente</p><p className="text-2xl font-semibold">{totals.forn}</p></div>
       </section>
       <section><h2 className="font-semibold mb-2">Pendências por fornecedor</h2>
-        <div className="bg-white border rounded-xl overflow-x-auto"><table className="w-full text-sm">
-          <thead className="bg-verde-50 text-left"><tr>{["Fornecedor", "Categoria", "Vazios enviados", "Cheios recebidos", "Pendente"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
-          <tbody>{open.map(p => <tr key={p.supplier + p.size} className="border-t"><td className="p-2">{p.supplier}</td><td className="p-2">{p.size}</td><td className="p-2">{p.sent}</td><td className="p-2">{p.returned}</td><td className="p-2 font-semibold">{p.pending}</td></tr>)}
-            {!open.length && <tr><td colSpan={5} className="p-3 text-neutral-500">Nenhuma pendência registrada.</td></tr>}</tbody></table></div></section>
+        <div className="card overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr>{["Fornecedor", "Categoria", "Vazios enviados", "Cheios recebidos", "Pendente"].map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>{open.map(p => <tr key={p.supplier + p.size} className="border-t"><td>{p.supplier}</td><td>{p.size}</td><td>{p.sent}</td><td>{p.returned}</td><td className="font-semibold">{p.pending}</td></tr>)}
+            {!open.length && <tr><td colSpan={5} className="empty-state">Nenhuma pendência registrada.</td></tr>}</tbody></table></div></section>
       {w && (<>
         <MoveForm title="1. Enviar cilindros vazios ao fornecedor" action={registerSupplierSend} back="/trocas" userName={user.name} submit="Registrar envio">{sup}</MoveForm>
         <MoveForm title="2. Receber cilindros cheios do fornecedor (retorno da troca)" action={registerSupplierReturn} back="/trocas" userName={user.name} submit="Registrar retorno">{sup}</MoveForm>

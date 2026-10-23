@@ -13,7 +13,7 @@ export default async function Cilindros({ searchParams }: { searchParams: Promis
   const user = await requireUser(); const sp = await searchParams; const w = user.role !== "CONSULTA";
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-semibold">Controle de Cilindros</h1>
+      <h1>Controle de Cilindros</h1>
       <Flash erro={sp.erro} ok={sp.ok} />
       <CylinderSummary />
       <p className="text-xs text-neutral-500">Em domicílio, os cilindros entregues contam como “em uso”. Os saldos só mudam quando uma movimentação é registrada.</p>

@@ -27,10 +27,10 @@ export default async function Pacientes({ searchParams }: { searchParams: Promis
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-semibold">Pacientes em Uso de Oxigênio em Domicílio</h1>
+        <h1>Pacientes em Uso de Oxigênio em Domicílio</h1>
         {user.role !== "CONSULTA" && <Link href="/pacientes/novo" className={btnCls}>Novo paciente</Link>}
       </div>
-      <form className="grid md:grid-cols-5 gap-2 bg-white border rounded-xl p-3">
+      <form className="grid md:grid-cols-5 gap-2 card p-3">
         <input name="q" defaultValue={sp.q} placeholder="Nome" className={inputCls} />
         <input name="bairro" defaultValue={sp.bairro} placeholder="Bairro" className={inputCls} />
         <input name="povoado" defaultValue={sp.povoado} placeholder="Povoado" className={inputCls} />
@@ -38,17 +38,17 @@ export default async function Pacientes({ searchParams }: { searchParams: Promis
           <option value="">Todos</option><option value="ATIVO">Ativos</option><option value="INATIVO">Inativos</option></select>
         <button className={btnCls + " mt-1"}>Buscar</button>
       </form>
-      <div className="overflow-x-auto bg-white border rounded-xl">
+      <div className="overflow-x-auto card">
         <table className="w-full text-sm">
-          <thead className="bg-verde-50 text-left"><tr>{["Nome", "Bairro", "Povoado", "Cilindro", "Qtd.", "Início", "Situação"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
+          <thead><tr>{["Nome", "Bairro", "Povoado", "Cilindro", "Qtd.", "Início", "Situação"].map(h => <th key={h}>{h}</th>)}</tr></thead>
           <tbody>{rows.map(p => (
             <tr key={p.id} className="border-t hover:bg-neutral-50">
-              <td className="p-2"><Link className="text-verde-700 underline" href={`/pacientes/${p.id}`}>{p.fullName}</Link></td>
-              <td className="p-2">{p.neighborhood ?? "—"}</td><td className="p-2">{p.village ?? "—"}</td>
-              <td className="p-2">{p.cylinderSize ?? "—"}</td><td className="p-2">{p.cylinderQty}</td>
-              <td className="p-2">{fmtDate(p.startDate)}</td>
-              <td className="p-2">{p.status === "ATIVO" ? "Ativo" : "Inativo"}</td></tr>))}
-            {!rows.length && <tr><td colSpan={7} className="p-4 text-neutral-500">Nenhum paciente encontrado.</td></tr>}
+              <td><Link className="text-verde-700 underline" href={`/pacientes/${p.id}`}>{p.fullName}</Link></td>
+              <td>{p.neighborhood ?? "—"}</td><td>{p.village ?? "—"}</td>
+              <td>{p.cylinderSize ?? "—"}</td><td>{p.cylinderQty}</td>
+              <td>{fmtDate(p.startDate)}</td>
+              <td>{p.status === "ATIVO" ? "Ativo" : "Inativo"}</td></tr>))}
+            {!rows.length && <tr><td colSpan={7} className="empty-state">Nenhum paciente encontrado.</td></tr>}
           </tbody></table></div>
       <div className="flex items-center gap-3 text-sm">
         {page > 1 && <Link className={btn2Cls} href={href(page - 1)}>Anterior</Link>}

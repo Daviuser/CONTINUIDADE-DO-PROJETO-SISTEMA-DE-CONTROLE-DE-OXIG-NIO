@@ -25,21 +25,21 @@ export default async function Auditoria({ searchParams }: { searchParams: Promis
   const href = (n: number) => `/auditoria?${new URLSearchParams({ ...(Object.fromEntries(Object.entries(sp).filter(([, v]) => v)) as Record<string, string>), page: String(n) })}`;
   return (
     <div className="space-y-4">
-      <h1 className="text-2xl font-semibold">Auditoria</h1>
-      <form className="bg-white border rounded-xl p-3 flex flex-wrap gap-2 items-end text-sm">
+      <h1>Auditoria</h1>
+      <form className="card p-3 flex flex-wrap gap-2 items-end text-sm">
         <label>De<input type="date" name="from" defaultValue={sp.from} className={inputCls} /></label>
         <label>Até<input type="date" name="to" defaultValue={sp.to} className={inputCls} /></label>
         <label>Registro<select name="entity" defaultValue={sp.entity ?? ""} className={inputCls}><option value="">Todos</option>{ents.map(e => <option key={e.entity}>{e.entity}</option>)}</select></label>
         <button className={btnCls}>Filtrar</button></form>
-      <div className="bg-white border rounded-xl overflow-x-auto"><table className="w-full text-sm">
-        <thead className="bg-verde-50 text-left"><tr>{["Data/hora", "Usuário", "Operação", "Registro", "Justificativa", "Detalhes"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
+      <div className="card overflow-x-auto"><table className="w-full text-sm">
+        <thead><tr>{["Data/hora", "Usuário", "Operação", "Registro", "Justificativa", "Detalhes"].map(h => <th key={h}>{h}</th>)}</tr></thead>
         <tbody>{rows.map(r => (
-          <tr key={r.id} className="border-t align-top"><td className="p-2 whitespace-nowrap">{fmtDateTime(r.at)}</td>
-            <td className="p-2">{users.find(u => u.id === r.userId)?.name ?? "—"}</td><td className="p-2">{r.action.replaceAll("_", " ")}</td>
-            <td className="p-2">{r.entity}</td><td className="p-2">{r.reason ?? "—"}</td>
-            <td className="p-2">{(r.before || r.after) ? <details><summary className="cursor-pointer text-verde-700">Ver</summary>
+          <tr key={r.id} className="border-t align-top"><td className="whitespace-nowrap">{fmtDateTime(r.at)}</td>
+            <td>{users.find(u => u.id === r.userId)?.name ?? "—"}</td><td>{r.action.replaceAll("_", " ")}</td>
+            <td>{r.entity}</td><td>{r.reason ?? "—"}</td>
+            <td>{(r.before || r.after) ? <details><summary className="cursor-pointer text-verde-700">Ver</summary>
               <pre className="text-xs bg-neutral-50 p-2 rounded max-w-md overflow-x-auto">{JSON.stringify({ antes: r.before, depois: r.after }, null, 1)}</pre></details> : "—"}</td></tr>))}
-          {!rows.length && <tr><td colSpan={6} className="p-4 text-neutral-500">Nenhum registro.</td></tr>}</tbody></table></div>
+          {!rows.length && <tr><td colSpan={6} className="empty-state">Nenhum registro.</td></tr>}</tbody></table></div>
       <div className="flex items-center gap-3 text-sm">{page > 1 && <Link className={btn2Cls} href={href(page - 1)}>Anterior</Link>}<span>Página {page} de {pages}</span>{page < pages && <Link className={btn2Cls} href={href(page + 1)}>Próxima</Link>}</div>
     </div>
   );

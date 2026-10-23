@@ -23,13 +23,13 @@ export default async function Paciente({ params, searchParams }: { params: Promi
   const writer = user.role !== "CONSULTA";
   return (
     <div className="space-y-6 max-w-4xl">
-      <div><h1 className="text-2xl font-semibold">{p.fullName}</h1>
+      <div><h1>{p.fullName}</h1>
         <p className="text-sm text-neutral-500">{p.status === "ATIVO" ? "Ativo" : `Inativo desde ${fmtDate(p.endDate)}`} · início em {fmtDate(p.startDate)}</p></div>
-      {erro && <p role="alert" className="bg-red-50 text-red-700 rounded p-2 text-sm">{erro}</p>}
-      {ok && <p className="bg-verde-50 text-verde-700 rounded p-2 text-sm">Salvo com sucesso.</p>}
+      {erro && <p role="alert" className="alert alert-error">{erro}</p>}
+      {ok && <p className="alert alert-ok">Salvo com sucesso.</p>}
       <PatientForm p={p} readOnly={!writer} />
       {writer && (
-        <form action={setPatientStatus} className="bg-white border rounded-xl p-4 flex flex-wrap items-end gap-3">
+        <form action={setPatientStatus} className="card p-4 flex flex-wrap items-end gap-3">
           <input type="hidden" name="id" value={p.id} />
           {p.status === "ATIVO" ? (<>
             <input type="hidden" name="status" value="INATIVO" />
@@ -41,14 +41,14 @@ export default async function Paciente({ params, searchParams }: { params: Promi
         </form>)}
       <section><h2 className="font-semibold mb-2">Histórico de entregas e recolhimentos</h2>
         <p className="text-sm text-neutral-600 mb-2">Registrados no sistema: {delivered} entregue(s) · {collected} recolhido(s). Registre novas operações em “Entregas e recolhimentos”.</p>
-        <div className="bg-white border rounded-xl overflow-x-auto"><table className="w-full text-sm">
-          <thead className="bg-verde-50 text-left"><tr>{["Data", "Operação", "Categoria", "Qtd.", "Responsável", "Situação"].map(h => <th key={h} className="p-2">{h}</th>)}</tr></thead>
-          <tbody>{moves.map(m => <tr key={m.id} className={"border-t " + (m.status === "ESTORNADA" ? "text-neutral-400 line-through" : "")}><td className="p-2">{fmtDate(m.occurredAt)}</td><td className="p-2">{m.operation === "ENTREGA_DOMICILIAR" ? "Entrega" : "Recolhimento"}{m.reversalOfId && " (estorno)"}</td><td className="p-2">{m.cylinderType.size}</td><td className="p-2">{m.quantity}</td><td className="p-2">{m.responsibleName}</td><td className="p-2">{m.status === "ESTORNADA" ? "Estornada" : "Confirmada"}</td></tr>)}
-            {!moves.length && <tr><td colSpan={6} className="p-3 text-neutral-500">Nenhuma movimentação registrada.</td></tr>}</tbody></table></div></section>
+        <div className="card overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr>{["Data", "Operação", "Categoria", "Qtd.", "Responsável", "Situação"].map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>{moves.map(m => <tr key={m.id} className={"border-t " + (m.status === "ESTORNADA" ? "text-neutral-400 line-through" : "")}><td>{fmtDate(m.occurredAt)}</td><td>{m.operation === "ENTREGA_DOMICILIAR" ? "Entrega" : "Recolhimento"}{m.reversalOfId && " (estorno)"}</td><td>{m.cylinderType.size}</td><td>{m.quantity}</td><td>{m.responsibleName}</td><td>{m.status === "ESTORNADA" ? "Estornada" : "Confirmada"}</td></tr>)}
+            {!moves.length && <tr><td colSpan={6} className="empty-state">Nenhuma movimentação registrada.</td></tr>}</tbody></table></div></section>
       <section><h2 className="font-semibold mb-2">Histórico de alterações</h2>
-        <ul className="bg-white border rounded-xl divide-y text-sm">{history.map(h => (
+        <ul className="card divide-y text-sm">{history.map(h => (
           <li key={h.id} className="p-2">{fmtDateTime(h.at)} — {h.action.replaceAll("_", " ").toLowerCase()}{h.reason && <> · motivo: {h.reason}</>}</li>))}
-          {!history.length && <li className="p-3 text-neutral-500">Sem alterações registradas.</li>}</ul></section>
+          {!history.length && <li className="empty-state">Sem alterações registradas.</li>}</ul></section>
     </div>
   );
 }

@@ -16,7 +16,7 @@ export default async function Domicilio({ searchParams }: { searchParams: Promis
       {patients.map(p => <option key={p.id} value={p.id}>{p.fullName}{p.neighborhood || p.village ? ` — ${p.neighborhood ?? p.village}` : ""}</option>)}</select></label>);
   return (
     <div className="space-y-5">
-      <h1 className="text-2xl font-semibold">Entregas e Recolhimentos Domiciliares</h1>
+      <h1>Entregas e Recolhimentos Domiciliares</h1>
       <Flash erro={sp.erro} ok={sp.ok} />
       <p className="text-sm text-neutral-600">Entrega e recolhimento são operações independentes e podem ocorrer em datas diferentes. O controle é por quantidade, sem identificar o cilindro.</p>
       {w && (<>

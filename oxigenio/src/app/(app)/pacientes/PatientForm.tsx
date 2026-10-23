@@ -1,14 +1,15 @@
-import { inputCls, btnCls } from "@/lib/ui";
+import { inputCls } from "@/lib/ui";
 import { toInputDate } from "@/lib/format";
 import { savePatient } from "./actions";
 import type { Patient } from "@prisma/client";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 
 export function PatientForm({ p, readOnly }: { p?: Patient; readOnly?: boolean }) {
   const F = ({ n, label, req, type = "text", def }: { n: string; label: string; req?: boolean; type?: string; def?: string | number | null }) => (
     <label className="block text-sm">{label}{req && " *"}
       <input name={n} type={type} required={req} defaultValue={def ?? ""} disabled={readOnly} className={inputCls} /></label>);
   return (
-    <form action={savePatient} className="bg-white border rounded-xl p-4 grid md:grid-cols-2 gap-3">
+    <form action={savePatient} className="card p-4 grid md:grid-cols-2 gap-3">
       {p && <input type="hidden" name="id" value={p.id} />}
       <div className="md:col-span-2"><F n="fullName" label="Nome completo" req def={p?.fullName} /></div>
       <F n="phone" label="Telefone de contato" type="tel" def={p?.phone} />
@@ -24,7 +25,7 @@ export function PatientForm({ p, readOnly }: { p?: Patient; readOnly?: boolean }
       <F n="startDate" label="Data de início do acompanhamento" type="date" req def={toInputDate(p?.startDate)} />
       <label className="block text-sm md:col-span-2">Observações
         <textarea name="notes" defaultValue={p?.notes ?? ""} disabled={readOnly} rows={3} className={inputCls} /></label>
-      {!readOnly && <div className="md:col-span-2"><button className={btnCls}>{p ? "Salvar alterações" : "Cadastrar paciente"}</button></div>}
+      {!readOnly && <div className="md:col-span-2"><SubmitButton icon="check">{p ? "Salvar alterações" : "Cadastrar paciente"}</SubmitButton></div>}
     </form>
   );
 }
