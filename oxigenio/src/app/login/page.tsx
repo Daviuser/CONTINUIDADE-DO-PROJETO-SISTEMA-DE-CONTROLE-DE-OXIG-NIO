@@ -9,14 +9,11 @@ import { Icon } from "@/components/Icon";
 
 async function entrar(formData: FormData) {
   "use server";
-  const p = z.object({ email: z.string().email(), password: z.string().min(1) }).safeParse({
-    email: formData.get("email"),
-    password: formData.get("password"),
-  });
+  const p = z.object({ username: z.string().trim().min(3).max(60), password: z.string().min(1) }).safeParse(Object.fromEntries(formData));
   if (!p.success) redirect("/login?erro=1");
-  const r = await login(p.data.email, p.data.password);
+  const r = await login(p.data.username, p.data.password);
   if (!r.ok) redirect("/login?erro=" + encodeURIComponent(r.error));
-  redirect("/dashboard");
+  redirect("/dashboard?bemvindo=1");
 }
 
 export default async function Login({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {
@@ -26,13 +23,13 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
       <h1 className="text-3xl font-extrabold">Bem-vindo(a)!</h1>
       <p className="mt-2 text-slate-500">Acesse o sistema para continuar.</p>
       <div className="mt-4 h-1 w-10 rounded bg-verde-600" />
-      {erro && <div role="alert" className="alert alert-error mt-6"><Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" /><span>{erro === "1" ? "Preencha um e-mail válido e a senha." : erro}</span></div>}
+      {erro && <div role="alert" className="alert alert-error mt-6"><Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" /><span>{erro === "1" ? "Preencha o usuário e a senha." : erro}</span></div>}
       <form action={entrar} className="mt-6 space-y-4">
         <div>
-          <label htmlFor="email" className="text-sm">E-mail de acesso</label>
+          <label htmlFor="username" className="text-sm">Usuário</label>
           <div className="relative mt-1.5">
             <Icon name="user" className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
-            <input id="email" name="email" type="email" required autoComplete="username" placeholder="nome@exemplo.com" className="min-h-12 w-full pl-11" />
+            <input id="username" name="username" type="text" required autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="Seu usuário" className="min-h-12 w-full pl-11" />
           </div>
         </div>
         <PasswordField />

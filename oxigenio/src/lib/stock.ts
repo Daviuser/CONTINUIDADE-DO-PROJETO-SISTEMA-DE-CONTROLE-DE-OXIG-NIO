@@ -3,7 +3,8 @@ import { Prisma } from "@prisma/client";
 import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, FlowmeterOperation } from "@prisma/client";
 import { db } from "./db";
 import { audit } from "./audit";
-import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL } from "./labels";
+import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "./labels";
+import { parseDate, todayStr } from "./format";
 
 export class StockError extends Error {}
 export type LocCode = "HOSPITAL" | "DOMICILIO" | "TRANSPORTE";
@@ -75,31 +76,30 @@ export async function cylinderSummary() {
   const [types, bal] = await Promise.all([db.cylinderType.findMany({ orderBy: { size: "asc" } }), db.stockBalance.findMany({ include: { location: { select: { code: true } } } })]);
   const rows = types.map(t => {
     const q = (loc: string, cond?: string) => bal.filter(b => b.cylinderTypeId === t.id && b.location.code === loc && (!cond || b.condition === cond)).reduce((a, b) => a + b.quantity, 0);
-    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), forn: q("TRANSPORTE"), total: 0 };
-    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.forn;
+    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), enf: q("ENFERMARIAS"), forn: q("TRANSPORTE"), total: 0 };
+    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.enf + r.forn;
     return r;
   });
-  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "forn" | "total";
+  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "enf" | "forn" | "total";
   const s = (k: K) => rows.reduce((a, r) => a + r[k], 0);
-  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") };
+  // hCheio = disponíveis (cheios no hospital). "hospital" inclui as enfermarias (estão dentro do hospital).
+  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), enf: s("enf"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") + s("enf") };
   return { rows, totals };
 }
 
-// Pendência por fornecedor = vazios enviados − cheios recebidos de volta (apenas registros confirmados e não estornados)
-export async function pendingBySupplier() {
+// Pendência de troca = vazios enviados − cheios recebidos de volta, por categoria (fornecedor único).
+export async function pendingBySize() {
   const base = { status: "CONFIRMADA" as const, reversalOfId: null };
   const [sent, ret, types] = await Promise.all([
-    db.stockMovement.groupBy({ by: ["supplier", "cylinderTypeId"], where: { ...base, operation: "ENVIO_FORNECEDOR" }, _sum: { quantity: true } }),
-    db.stockMovement.groupBy({ by: ["supplier", "cylinderTypeId"], where: { ...base, operation: "RETORNO_FORNECEDOR" }, _sum: { quantity: true } }),
-    db.cylinderType.findMany(),
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...base, operation: "ENVIO_FORNECEDOR" }, _sum: { quantity: true } }),
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...base, operation: "RETORNO_FORNECEDOR" }, _sum: { quantity: true } }),
+    db.cylinderType.findMany({ orderBy: { size: "asc" } }),
   ]);
-  const map = new Map<string, { supplier: string; size: string; sent: number; returned: number }>();
-  const add = (arr: typeof sent, k: "sent" | "returned") => arr.forEach(r => {
-    const name = (r.supplier ?? "—").trim(); const size = types.find(t => t.id === r.cylinderTypeId)?.size ?? "?";
-    const key = name.toLowerCase() + "|" + size; const cur = map.get(key) ?? { supplier: name, size, sent: 0, returned: 0 };
-    cur[k] += r._sum.quantity ?? 0; map.set(key, cur); });
-  add(sent, "sent"); add(ret, "returned");
-  return [...map.values()].map(r => ({ ...r, pending: r.sent - r.returned })).sort((a, b) => a.supplier.localeCompare(b.supplier) || a.size.localeCompare(b.size));
+  return types.map(t => {
+    const s = sent.find(x => x.cylinderTypeId === t.id)?._sum.quantity ?? 0;
+    const r = ret.find(x => x.cylinderTypeId === t.id)?._sum.quantity ?? 0;
+    return { size: t.size as string, label: t.label, sent: s, returned: r, pending: s - r };
+  });
 }
 
 // ---------- FLUXÔMETROS ----------
@@ -150,5 +150,82 @@ export async function reverseFlowmeter(p: { id: string; reason: string; userId: 
 export async function flowmeterSummary() {
   const b = await db.flowmeterBalance.findMany();
   const q = (l: string) => b.find(x => x.location === l)?.quantity ?? 0;
-  return { hospital: q("HOSPITAL"), domicilio: q("DOMICILIO"), total: q("HOSPITAL") + q("DOMICILIO") };
+  const hospital = q("HOSPITAL"), domicilio = q("DOMICILIO"), enfermarias = q("ENFERMARIAS");
+  return { hospital, domicilio, enfermarias, total: hospital + domicilio + enfermarias };
+}
+
+// ---------- AJUSTE SIMPLES: "informe o total e onde estão" ----------
+// Compara com os saldos atuais e grava só as diferenças no livro-razão (AJUSTE_ESTOQUE), mantendo histórico e auditoria.
+export type CylinderTarget = { size: CylinderSize; total: number; vazios: number; dom: number; enf: number; indisp: number };
+const okInt = (n: number) => Number.isInteger(n) && n >= 0 && n <= 1_000_000;
+const serialFail = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2034";
+
+export async function setCylinderStock(targets: CylinderTarget[], by: { userId: string; userName: string }, requestKey?: string): Promise<{ changed: number; duplicate: boolean }> {
+  for (const t of targets) if (![t.total, t.vazios, t.dom, t.enf, t.indisp].every(okInt)) throw new StockError("Use apenas números inteiros, zero ou maiores.");
+  if (requestKey && (await db.stockMovement.findFirst({ where: { requestKey: { startsWith: requestKey + "|" } }, select: { id: true } }))) return { changed: 0, duplicate: true };
+  try {
+    const changed = await db.$transaction(async tx => {
+      const [locs, types] = await Promise.all([tx.location.findMany({ select: { id: true, code: true } }), tx.cylinderType.findMany({ select: { id: true, size: true } })]);
+      const need = (c: string) => { const l = locs.find(x => x.code === c); if (!l) throw new StockError("Localização não cadastrada (rode o seed)."); return l.id; };
+      const H = need("HOSPITAL"), D = need("DOMICILIO"), T = need("TRANSPORTE");
+      const E = (await tx.location.upsert({ where: { code: "ENFERMARIAS" }, update: {}, create: { code: "ENFERMARIAS", name: "Enfermarias" }, select: { id: true } })).id;
+      let count = 0;
+      for (const t of targets) {
+        const type = types.find(x => x.size === t.size); if (!type) throw new StockError("Tipo de cilindro não cadastrado (rode o seed).");
+        const bal = await tx.stockBalance.findMany({ where: { cylinderTypeId: type.id } });
+        const cur = (loc: string, cond: StockCondition) => bal.find(b => b.locationId === loc && b.condition === cond)?.quantity ?? 0;
+        const forn = bal.filter(b => b.locationId === T).reduce((a, b) => a + b.quantity, 0); // trocas com fornecedor: não alterado aqui
+        const disp = t.total - t.vazios - t.dom - t.enf - t.indisp - forn;
+        if (disp < 0) throw new StockError(`${SIZE_LABEL[t.size]}: vazios + domicílio + enfermarias + indisponíveis${forn ? " + com o fornecedor (" + forn + ")" : ""} passam do total (${t.total}).`);
+        const cells: [string, StockCondition, number][] = [[H, "CHEIO", disp], [H, "VAZIO", t.vazios], [H, "INDISPONIVEL", t.indisp], [D, "CHEIO", t.dom], [E, "CHEIO", t.enf]];
+        for (const [loc, cond, target] of cells) {
+          const delta = target - cur(loc, cond);
+          if (delta === 0) continue;
+          await tx.stockBalance.upsert({ where: { locationId_cylinderTypeId_condition: { locationId: loc, cylinderTypeId: type.id, condition: cond } },
+            create: { locationId: loc, cylinderTypeId: type.id, condition: cond, quantity: target }, update: { quantity: target } });
+          await tx.stockMovement.create({ data: { operation: "AJUSTE_ESTOQUE", cylinderTypeId: type.id, quantity: Math.abs(delta),
+            fromLocationId: delta < 0 ? loc : null, fromCondition: delta < 0 ? cond : null, toLocationId: delta > 0 ? loc : null, toCondition: delta > 0 ? cond : null,
+            occurredAt: parseDate(todayStr()), responsibleName: by.userName, notes: "Atualização do estoque",
+            requestKey: requestKey ? `${requestKey}|${t.size}|${count}` : null, createdById: by.userId } });
+          count++;
+        }
+      }
+      return count;
+    }, { isolationLevel: "Serializable" });
+    if (changed) await audit({ userId: by.userId, action: "ESTOQUE_CILINDROS_ATUALIZADO", entity: "StockBalance", after: targets });
+    return { changed, duplicate: false };
+  } catch (e) {
+    if (isDup(e)) return { changed: 0, duplicate: true };
+    if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente salvar novamente.");
+    throw e;
+  }
+}
+
+export async function setFlowmeterStock(t: { total: number; dom: number; enf: number }, by: { userId: string; userName: string }, requestKey?: string): Promise<{ changed: number; duplicate: boolean }> {
+  if (![t.total, t.dom, t.enf].every(okInt)) throw new StockError("Use apenas números inteiros, zero ou maiores.");
+  const disp = t.total - t.dom - t.enf;
+  if (disp < 0) throw new StockError("Em domicílio + nas enfermarias passam do total de fluxômetros.");
+  if (requestKey && (await db.flowmeterMovement.findFirst({ where: { requestKey: { startsWith: requestKey + "|" } }, select: { id: true } }))) return { changed: 0, duplicate: true };
+  try {
+    const changed = await db.$transaction(async tx => {
+      const bal = await tx.flowmeterBalance.findMany();
+      const targets: [FlowmeterLocation, number][] = [["HOSPITAL", disp], ["DOMICILIO", t.dom], ["ENFERMARIAS", t.enf]];
+      let count = 0;
+      for (const [loc, target] of targets) {
+        const delta = target - (bal.find(b => b.location === loc)?.quantity ?? 0);
+        if (delta === 0) continue;
+        await tx.flowmeterBalance.upsert({ where: { location: loc }, create: { location: loc, quantity: target }, update: { quantity: target } });
+        await tx.flowmeterMovement.create({ data: { operation: "AJUSTE", quantity: Math.abs(delta), fromLocation: delta < 0 ? loc : null, toLocation: delta > 0 ? loc : null,
+          occurredAt: parseDate(todayStr()), responsibleName: by.userName, notes: "Atualização do estoque", requestKey: requestKey ? `${requestKey}|${loc}` : null, createdById: by.userId } });
+        count++;
+      }
+      return count;
+    }, { isolationLevel: "Serializable" });
+    if (changed) await audit({ userId: by.userId, action: "ESTOQUE_FLUXOMETROS_ATUALIZADO", entity: "FlowmeterBalance", after: t });
+    return { changed, duplicate: false };
+  } catch (e) {
+    if (isDup(e)) return { changed: 0, duplicate: true };
+    if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente salvar novamente.");
+    throw e;
+  }
 }

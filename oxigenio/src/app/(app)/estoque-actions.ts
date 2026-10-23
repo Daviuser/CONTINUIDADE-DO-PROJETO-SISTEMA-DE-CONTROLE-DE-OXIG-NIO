@@ -51,7 +51,7 @@ export async function registerInitialStock(fd: FormData) {
 }
 
 export async function registerSupply(fd: FormData) {
-  return go(fd, supplier, async d => ({ operation: "ABASTECIMENTO", supplier: d.supplier.trim(), to: { loc: "HOSPITAL", cond: "CHEIO" } }));
+  return go(fd, none, async () => ({ operation: "ABASTECIMENTO", to: { loc: "HOSPITAL", cond: "CHEIO" } }));
 }
 
 export async function registerUnavailable(fd: FormData) {
@@ -75,11 +75,11 @@ export async function registerCollection(fd: FormData) {
 }
 
 export async function registerSupplierSend(fd: FormData) {
-  return go(fd, supplier, async d => ({ operation: "ENVIO_FORNECEDOR", supplier: d.supplier.trim(), from: { loc: "HOSPITAL", cond: "VAZIO" }, to: { loc: "TRANSPORTE", cond: "VAZIO" } }));
+  return go(fd, none, async () => ({ operation: "ENVIO_FORNECEDOR", from: { loc: "HOSPITAL", cond: "VAZIO" }, to: { loc: "TRANSPORTE", cond: "VAZIO" } }));
 }
 
 export async function registerSupplierReturn(fd: FormData) {
-  return go(fd, supplier, async d => ({ operation: "RETORNO_FORNECEDOR", supplier: d.supplier.trim(), from: { loc: "TRANSPORTE", cond: "VAZIO" }, to: { loc: "HOSPITAL", cond: "CHEIO" } }));
+  return go(fd, none, async () => ({ operation: "RETORNO_FORNECEDOR", from: { loc: "TRANSPORTE", cond: "VAZIO" }, to: { loc: "HOSPITAL", cond: "CHEIO" } }));
 }
 
 export async function reverseCylinderMovement(fd: FormData) {

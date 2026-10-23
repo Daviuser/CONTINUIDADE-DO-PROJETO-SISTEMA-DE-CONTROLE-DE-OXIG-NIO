@@ -9,7 +9,7 @@ import { formObj } from "@/lib/format";
 
 const pw = z.string().min(10, "A senha deve ter ao menos 10 caracteres.");
 const create = z.object({
-  name: z.string().min(3, "Informe o nome."), email: z.string().email("E-mail inválido."),
+  name: z.string().min(3, "Informe o nome."), username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,40}$/, "Usuário: 3 a 40 caracteres, apenas letras, números, ponto, hífen e sublinhado."),
   jobTitle: z.string().optional(), role: z.enum(["ADMIN", "OPERADOR", "CONSULTA"]), password: pw });
 const bad = (m: string): never => redirect(`/usuarios?erro=${encodeURIComponent(m)}`);
 
@@ -17,9 +17,9 @@ export async function createUser(fd: FormData) {
   const admin = await requireAdmin();
   const p = create.safeParse(formObj(fd));
   if (!p.success) return bad(p.error.issues[0].message);
-  const { password, ...d } = p.data;
-  const email = d.email.toLowerCase();
-  if (await db.user.findUnique({ where: { email } })) return bad("Já existe usuário com este e-mail.");
+  const { password, username, ...d } = p.data;
+  const email = username; // guardado na coluna "email" (sem migration)
+  if (await db.user.findUnique({ where: { email } })) return bad("Já existe um usuário com este nome de acesso.");
   const u = await db.user.create({ data: { ...d, email, passwordHash: await hash(password) } });
   await audit({ userId: admin.id, action: "USUARIO_CRIADO", entity: "User", entityId: u.id, after: { email, role: d.role } });
   redirect("/usuarios?ok=1");

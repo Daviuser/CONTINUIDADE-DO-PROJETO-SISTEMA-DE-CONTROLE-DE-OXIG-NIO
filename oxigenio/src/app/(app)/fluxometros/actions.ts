@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { requireWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
-import { applyFlowmeter, reverseFlowmeter, StockError, type FlowInput } from "@/lib/stock";
+import { applyFlowmeter, reverseFlowmeter, setFlowmeterStock, StockError, type FlowInput } from "@/lib/stock";
 
 const MAP: Record<string, Pick<FlowInput, "operation" | "from" | "to">> = {
   ADD_HOSPITAL: { operation: "ENTRADA", to: "HOSPITAL" }, ADD_DOMICILIO: { operation: "ENTRADA", to: "DOMICILIO" },
@@ -38,4 +38,19 @@ export async function reverseFlowmeterMovement(fd: FormData) {
   try { await reverseFlowmeter({ id: String(fd.get("id")), reason: String(fd.get("reason") ?? ""), userId: user.id, userName: user.name }); }
   catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
   return done(msg);
+}
+
+const num = z.coerce.number({ invalid_type_error: "Use apenas números." }).int("Use apenas números inteiros.").min(0, "Não use números negativos.").max(1000000);
+const stockSchema = z.object({ total: num, dom: num, enf: num, requestKey: z.string().max(80).optional() });
+
+export async function saveFlowmeterStock(fd: FormData) {
+  const user = await requireWriter();
+  const p = stockSchema.safeParse(Object.fromEntries(fd));
+  if (!p.success) return done(p.error.issues[0].message);
+  let msg: string | null = null; let ok = "estoque";
+  try {
+    const r = await setFlowmeterStock({ total: p.data.total, dom: p.data.dom, enf: p.data.enf }, { userId: user.id, userName: user.name }, p.data.requestKey);
+    if (r.duplicate) ok = "dup"; else if (r.changed === 0) ok = "nenhuma";
+  } catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
+  return msg ? done(msg) : redirect(`/fluxometros?ok=${ok}`);
 }

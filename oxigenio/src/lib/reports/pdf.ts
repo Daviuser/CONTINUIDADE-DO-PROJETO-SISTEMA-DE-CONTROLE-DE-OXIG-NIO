@@ -44,9 +44,9 @@ function table(b: Block) {
 
 function signatures(labels: string[], usable: number) {
   const gap = 30, n = labels.length;
-  const colW = (usable - gap * (n - 1)) / n, lw = colW - 6;
+  const colW = n === 1 ? 280 : (usable - gap * (n - 1)) / n, lw = colW - 6;
   const small = (t: string) => ({ text: t, fontSize: 7, color: MUTED, margin: [0, 2, 0, 0] });
-  return { unbreakable: true, margin: [0, 34, 0, 0], columnGap: gap, columns: labels.map(l => ({ width: "*", stack: [
+  return { unbreakable: true, margin: [0, 34, 0, 0], columnGap: gap, columns: labels.map(l => ({ width: n === 1 ? colW : "*", stack: [
     { text: l, bold: true, fontSize: 9, margin: [0, 0, 0, 30] }, line(lw), small("Nome do responsável"),
     { ...line(lw), margin: [0, 26, 0, 0] }, small("Cargo ou função"),
     { ...line(lw), margin: [0, 30, 0, 0] }, small("Assinatura"),

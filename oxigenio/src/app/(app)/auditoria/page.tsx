@@ -26,7 +26,7 @@ export default async function Auditoria({ searchParams }: { searchParams: Promis
   return (
     <div className="space-y-4">
       <h1>Auditoria</h1>
-      <form className="card p-3 flex flex-wrap gap-2 items-end text-sm">
+      <form className="card filters p-3 flex flex-wrap gap-2 items-end text-sm">
         <label>De<input type="date" name="from" defaultValue={sp.from} className={inputCls} /></label>
         <label>Até<input type="date" name="to" defaultValue={sp.to} className={inputCls} /></label>
         <label>Registro<select name="entity" defaultValue={sp.entity ?? ""} className={inputCls}><option value="">Todos</option>{ents.map(e => <option key={e.entity}>{e.entity}</option>)}</select></label>

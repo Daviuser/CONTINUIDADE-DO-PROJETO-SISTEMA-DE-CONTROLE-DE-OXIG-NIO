@@ -30,7 +30,7 @@ export async function History({ title, ops, sp, base, canReverse, patients, supp
   return (
     <section className="space-y-3">
       <h2 className="font-semibold">{title}</h2>
-      <form className="card p-3 flex flex-wrap gap-2 items-end text-sm">
+      <form className="card filters p-3 flex flex-wrap gap-2 items-end text-sm">
         <label>De<input type="date" name="from" defaultValue={sp.from} className={inputCls} /></label>
         <label>Até<input type="date" name="to" defaultValue={sp.to} className={inputCls} /></label>
         {ops.length > 1 && <label>Operação<select name="op" defaultValue={sp.op ?? ""} className={inputCls}><option value="">Todas</option>{ops.map(o => <option key={o} value={o}>{OP_LABEL[o]}</option>)}</select></label>}
@@ -50,14 +50,14 @@ export async function History({ title, ops, sp, base, canReverse, patients, supp
             <td>{m.responsibleName}<div className="text-xs text-neutral-400 no-underline">{fmtDateTime(m.createdAt)}</div></td>
             <td className="no-underline">
               {m.reversalOfId ? <span className="text-xs">Motivo: {m.reversalReason}</span>
-                : m.status === "ESTORNADA" ? "Estornada"
-                : canReverse ? (
+                : m.status === "ESTORNADA" ? <span className="badge badge-warn">Estornada</span>
+                : canReverse && m.operation !== "AJUSTE_ESTOQUE" ? (
                   <details><summary className="cursor-pointer text-laranja-600">Estornar</summary>
                     <form action={reverseCylinderMovement} className="mt-1 space-y-1">
                       <input type="hidden" name="id" value={m.id} /><input type="hidden" name="back" value={base} />
                       <input name="reason" required minLength={5} placeholder="Justificativa *" className="w-44" />
                       <button className={btn2Cls}>Confirmar estorno</button></form></details>
-                ) : "Confirmada"}
+                ) : <span className="badge badge-ok">Confirmada</span>}
             </td></tr>))}
           {!rows.length && <tr><td colSpan={8} className="empty-state">Nenhuma movimentação encontrada.</td></tr>}</tbody></table></div>
       <div className="flex items-center gap-3 text-sm">

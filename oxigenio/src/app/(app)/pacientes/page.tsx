@@ -26,11 +26,11 @@ export default async function Pacientes({ searchParams }: { searchParams: Promis
   const href = (n: number) => `/pacientes?${new URLSearchParams({ ...(Object.fromEntries(Object.entries(sp).filter(([, v]) => v)) as Record<string, string>), page: String(n) })}`;
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1>Pacientes em Uso de Oxigênio em Domicílio</h1>
         {user.role !== "CONSULTA" && <Link href="/pacientes/novo" className={btnCls}>Novo paciente</Link>}
       </div>
-      <form className="grid md:grid-cols-5 gap-2 card p-3">
+      <form className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2 card p-3">
         <input name="q" defaultValue={sp.q} placeholder="Nome" className={inputCls} />
         <input name="bairro" defaultValue={sp.bairro} placeholder="Bairro" className={inputCls} />
         <input name="povoado" defaultValue={sp.povoado} placeholder="Povoado" className={inputCls} />
@@ -47,7 +47,7 @@ export default async function Pacientes({ searchParams }: { searchParams: Promis
               <td>{p.neighborhood ?? "—"}</td><td>{p.village ?? "—"}</td>
               <td>{p.cylinderSize ?? "—"}</td><td>{p.cylinderQty}</td>
               <td>{fmtDate(p.startDate)}</td>
-              <td>{p.status === "ATIVO" ? "Ativo" : "Inativo"}</td></tr>))}
+              <td><span className={"badge " + (p.status === "ATIVO" ? "badge-ok" : "badge-muted")}>{p.status === "ATIVO" ? "Ativo" : "Inativo"}</span></td></tr>))}
             {!rows.length && <tr><td colSpan={7} className="empty-state">Nenhum paciente encontrado.</td></tr>}
           </tbody></table></div>
       <div className="flex items-center gap-3 text-sm">

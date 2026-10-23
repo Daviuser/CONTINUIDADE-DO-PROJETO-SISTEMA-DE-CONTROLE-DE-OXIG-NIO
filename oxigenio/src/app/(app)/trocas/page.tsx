@@ -1,41 +1,32 @@
 import { requireUser } from "@/lib/auth";
-import { inputCls } from "@/lib/ui";
 import { MoveForm, Flash } from "../_components/MoveForm";
 import { History } from "../_components/History";
+import { Stat } from "@/components/ui/Stat";
 import { registerSupplierSend, registerSupplierReturn } from "../estoque-actions";
-import { cylinderSummary, pendingBySupplier } from "@/lib/stock";
-import { SIZE_LABEL } from "@/lib/labels";
-import { db } from "@/lib/db";
+import { pendingBySize } from "@/lib/stock";
 
 export const dynamic = "force-dynamic";
 
 export default async function Trocas({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const user = await requireUser(); const sp = await searchParams; const w = user.role !== "CONSULTA";
-  const [{ rows, totals }, pend, suppliers] = await Promise.all([
-    cylinderSummary(), pendingBySupplier(),
-    db.stockMovement.findMany({ where: { operation: { in: ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR", "ABASTECIMENTO"] }, supplier: { not: null } }, distinct: ["supplier"], select: { supplier: true }, take: 50 }),
-  ]);
-  const open = pend.filter(p => p.pending !== 0);
-  const sup = <><datalist id="sup">{suppliers.map(s => <option key={s.supplier} value={s.supplier!} />)}</datalist>
-    <label className="text-sm">Fornecedor *<input name="supplier" list="sup" required className={inputCls} /></label></>;
+  const pend = await pendingBySize();
+  const total = pend.reduce((a, p) => a + p.pending, 0);
   return (
-    <div className="space-y-5">
-      <h1>Trocas com Fornecedores</h1>
+    <>
+      <div><h1>Trocas com o Fornecedor</h1><p className="mt-1 text-sm text-slate-500">Envie os cilindros <b>vazios</b> e registre a volta dos <b>cheios</b>. O envio e o retorno podem acontecer em dias diferentes.</p></div>
       <Flash erro={sp.erro} ok={sp.ok} />
-      <section className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {rows.map(r => <div key={r.size} className="card p-3"><p className="text-xs text-neutral-500">Vazios pendentes — {SIZE_LABEL[r.size]}</p><p className="text-2xl font-semibold text-laranja-600">{r.forn}</p></div>)}
-        <div className="card p-3"><p className="text-xs text-neutral-500">Total pendente</p><p className="text-2xl font-semibold">{totals.forn}</p></div>
+      <section className="space-y-3" aria-labelledby="h-pend">
+        <h2 id="h-pend" className="text-xs font-semibold uppercase tracking-wider text-slate-500">Pendentes (vazios enviados ainda não devolvidos)</h2>
+        <div className="stagger grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {pend.map(p => <Stat key={p.size} label={p.label} value={Math.max(0, p.pending)} icon="truck" tone="warn" hint={`Enviados ${p.sent} · Recebidos ${p.returned}`} />)}
+          <Stat label="Total pendente" value={Math.max(0, total)} icon="box" />
+        </div>
       </section>
-      <section><h2 className="font-semibold mb-2">Pendências por fornecedor</h2>
-        <div className="card overflow-x-auto"><table className="w-full text-sm">
-          <thead><tr>{["Fornecedor", "Categoria", "Vazios enviados", "Cheios recebidos", "Pendente"].map(h => <th key={h}>{h}</th>)}</tr></thead>
-          <tbody>{open.map(p => <tr key={p.supplier + p.size} className="border-t"><td>{p.supplier}</td><td>{p.size}</td><td>{p.sent}</td><td>{p.returned}</td><td className="font-semibold">{p.pending}</td></tr>)}
-            {!open.length && <tr><td colSpan={5} className="empty-state">Nenhuma pendência registrada.</td></tr>}</tbody></table></div></section>
       {w && (<>
-        <MoveForm title="1. Enviar cilindros vazios ao fornecedor" action={registerSupplierSend} back="/trocas" userName={user.name} submit="Registrar envio">{sup}</MoveForm>
-        <MoveForm title="2. Receber cilindros cheios do fornecedor (retorno da troca)" action={registerSupplierReturn} back="/trocas" userName={user.name} submit="Registrar retorno">{sup}</MoveForm>
+        <MoveForm title="1. Enviar cilindros vazios ao fornecedor" action={registerSupplierSend} back="/trocas" userName={user.name} submit="Registrar envio" />
+        <MoveForm title="2. Receber cilindros cheios do fornecedor" action={registerSupplierReturn} back="/trocas" userName={user.name} submit="Registrar retorno" />
       </>)}
-      <History title="Histórico de trocas" ops={["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"]} sp={sp} base="/trocas" canReverse={w} supplierFilter />
-    </div>
+      <History title="Histórico de trocas" ops={["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"]} sp={sp} base="/trocas" canReverse={w} />
+    </>
   );
 }

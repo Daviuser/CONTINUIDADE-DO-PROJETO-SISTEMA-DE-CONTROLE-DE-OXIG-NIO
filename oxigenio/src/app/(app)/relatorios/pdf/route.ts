@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { Prisma } from "@prisma/client";
 import { getSession } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { paramsSchema } from "@/lib/reports/params";
 import { buildReport, ReportError } from "@/lib/reports/data";
@@ -21,8 +19,7 @@ export async function GET(req: NextRequest) {
   try {
     const report = await buildReport(parsed.data, { role: user.role, name: user.name });
     const pdf = await renderPdf(report, { name: user.name });
-    const issued = await db.issuedReport.create({ data: { type: parsed.data.type, params: parsed.data as unknown as Prisma.InputJsonValue, issuedById: user.id } });
-    await audit({ userId: user.id, action: "RELATORIO_EMITIDO", entity: "IssuedReport", entityId: issued.id, after: { type: parsed.data.type, from: parsed.data.from, to: parsed.data.to } });
+    await audit({ userId: user.id, action: "RELATORIO_EMITIDO", entity: "Relatorio", after: { type: parsed.data.type, from: parsed.data.from, to: parsed.data.to } });
     const disp = req.nextUrl.searchParams.get("download") === "1" ? "attachment" : "inline";
     return new NextResponse(new Uint8Array(pdf), { headers: {
       "Content-Type": "application/pdf", "Content-Disposition": `${disp}; filename="${report.filename}.pdf"`, "Cache-Control": "no-store" } });

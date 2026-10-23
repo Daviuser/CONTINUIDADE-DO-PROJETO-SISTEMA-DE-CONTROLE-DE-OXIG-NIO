@@ -18,6 +18,7 @@ export function AppShell({ user, groups, today, logoutAction, children }: {
 
   return (
     <div className="min-h-screen lg:flex">
+      <a href="#conteudo" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-white focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:shadow-pop">Ir para o conteúdo</a>
       {open && <div className="fixed inset-0 z-30 bg-slate-900/40 lg:hidden" onClick={() => setOpen(false)} aria-hidden="true" />}
       <aside className={"fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r bg-white transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:shrink-0 lg:translate-x-0 " + (open ? "translate-x-0" : "-translate-x-full")}
         aria-label="Navegação principal">
@@ -50,6 +51,7 @@ export function AppShell({ user, groups, today, logoutAction, children }: {
 
       <div className="min-w-0 flex-1">
         <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b bg-white/85 px-4 backdrop-blur md:px-8">
+          <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-verde-600/50 via-laranja-500/40 to-transparent" />
           <div className="flex items-center gap-3">
             <button onClick={() => setOpen(true)} className="grid h-9 w-9 place-items-center rounded-lg text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Abrir menu" aria-expanded={open}><Icon name="menu" /></button>
             <p className="hidden text-sm capitalize text-slate-500 sm:block">{today}</p>
@@ -62,7 +64,7 @@ export function AppShell({ user, groups, today, logoutAction, children }: {
             <form action={logoutAction}><button className="btn btn-secondary !px-3 !py-1.5" title="Encerrar sessão"><Icon name="logout" className="h-4 w-4" /><span className="hidden sm:inline">Sair</span></button></form>
           </div>
         </header>
-        <main className="page-enter mx-auto w-full max-w-7xl space-y-6 p-4 md:p-8">{children}</main>
+        <main id="conteudo" tabIndex={-1} className="page-enter outline-none mx-auto w-full max-w-7xl space-y-6 p-4 md:p-8">{children}</main>
       </div>
     </div>
   );

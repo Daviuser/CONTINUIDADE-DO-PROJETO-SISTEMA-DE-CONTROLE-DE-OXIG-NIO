@@ -41,7 +41,7 @@ export function AuthShell({ children }: { children: React.ReactNode }) {
 
       <section className="relative flex flex-col items-center justify-center px-5 pb-28 pt-10 sm:px-10 lg:pb-10">
         <div className="mb-8 w-full max-w-md lg:hidden"><BrandLogo className="w-full max-w-sm" /></div>
-        <div className="w-full max-w-md lg:rounded-2xl lg:border lg:bg-white lg:p-10 lg:shadow-pop">{children}</div>
+        <div className="page-enter w-full max-w-md sm:rounded-2xl sm:border sm:bg-white sm:p-8 sm:shadow-pop lg:p-10">{children}</div>
       </section>
     </main>
   );

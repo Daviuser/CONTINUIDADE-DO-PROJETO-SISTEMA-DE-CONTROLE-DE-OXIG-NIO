@@ -12,7 +12,7 @@
   h2 { @apply text-base font-semibold; }
   label { @apply font-medium text-slate-700; }
 
-  input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="submit"]), select, textarea {
+  input:where(:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="submit"])), select, textarea {
     @apply min-h-[2.5rem] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-grafite-900 shadow-sm transition placeholder:text-slate-400;
   }
   input:focus, select:focus, textarea:focus { @apply border-verde-600 outline-none ring-4 ring-verde-600/15; }
@@ -26,6 +26,18 @@
   tbody tr { @apply border-t; }
   tbody tr:hover { background: #fafcfb; }
   th.num, td.num { text-align: right; }
+
+  /* Celular: 16px evita o zoom automático do iOS ao focar nos campos; alvos de toque maiores */
+  @media (max-width: 639px) {
+    input, select, textarea { font-size: 16px; }
+    .btn { min-height: 2.5rem; }
+  }
+  /* Tabelas mantêm largura legível e rolam na horizontal dentro do cartão */
+  @media (max-width: 767px) {
+    .card > table { min-width: 36rem; }
+    .card > table:has(th:nth-child(7)) { min-width: 56rem; }
+    .card { -webkit-overflow-scrolling: touch; }
+  }
 }
 
 @layer components {
@@ -39,6 +51,7 @@
   .alert-error { @apply border-red-500 bg-red-50 text-red-800; }
   .empty-state { @apply px-4 py-10 text-center text-sm text-slate-500; }
   .skeleton { @apply animate-pulse rounded-xl bg-slate-200/70; }
+  .filters > label { flex: 1 1 9rem; min-width: 0; }
   .page-enter { animation: pageEnter .22s ease-out both; }
 }
 
@@ -47,4 +60,49 @@ details > summary::-webkit-details-marker { display: none; }
 details[open] > form { @apply mt-2 space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-2; }
 
 @keyframes pageEnter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .page-enter { animation: none; } html { scroll-behavior: auto; } * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) { .filters > label { flex: 1 1 9rem; min-width: 0; }
+  .page-enter { animation: none; } html { scroll-behavior: auto; } * { transition: none !important; } }
+
+/* ===== Refinamento visual (rodada 2) ===== */
+html { background: #f4f7f5; }
+body {
+  background-image: radial-gradient(1100px 380px at 88% -8%, rgba(63,154,53,.08), transparent 62%), radial-gradient(800px 280px at 0% 0%, rgba(242,138,30,.05), transparent 55%);
+  background-attachment: fixed;
+}
+::selection { background: rgba(63,154,53,.25); }
+* { scrollbar-width: thin; scrollbar-color: #c5d0ca transparent; }
+
+main h1 { position: relative; padding-left: .9rem; }
+main h1::before { content: ""; position: absolute; left: 0; top: .18em; bottom: .18em; width: 4px; border-radius: 4px; background: linear-gradient(180deg, #1e7a2e, #f28a1e); }
+
+.btn { transition: background-color .15s, box-shadow .15s, transform .1s, opacity .15s; }
+.btn:active:not(:disabled) { transform: scale(.98); }
+.btn-primary { background-image: linear-gradient(180deg, #23903a, #1a6d29); }
+.btn-primary:hover { background-image: linear-gradient(180deg, #1e7a2e, #155a23); }
+.card { transition: box-shadow .2s, transform .2s; }
+tbody tr { transition: background-color .12s; }
+
+/* Distintivos de situação */
+.badge { display: inline-flex; align-items: center; gap: .38rem; border-radius: 9999px; padding: .14rem .6rem; font-size: .72rem; font-weight: 600; white-space: nowrap; }
+.badge::before { content: ""; width: .4rem; height: .4rem; border-radius: 9999px; background: currentColor; }
+.badge-ok { background: #e4f4e1; color: #17632a; }
+.badge-warn { background: #fff0dc; color: #b45f06; }
+.badge-muted { background: #eef1ef; color: #5f6e7a; }
+
+/* Carregamento */
+.skeleton { background: linear-gradient(90deg, #e7edea 25%, #f5f9f6 37%, #e7edea 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+@keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+form[data-submitting] :is(button[type="submit"], button:not([type])):not(:disabled) { pointer-events: none; opacity: .65; }
+form[data-submitting] :is(button[type="submit"], button:not([type])):not(:disabled)::after {
+  content: ""; display: inline-block; width: .9rem; height: .9rem; margin-left: .5rem; vertical-align: -.15rem;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 9999px; animation: spin .7s linear infinite;
+}
+
+/* Entrada escalonada dos cartões */
+.stagger > * { animation: pageEnter .38s ease-out both; }
+.stagger > *:nth-child(2) { animation-delay: .04s; } .stagger > *:nth-child(3) { animation-delay: .08s; }
+.stagger > *:nth-child(4) { animation-delay: .12s; } .stagger > *:nth-child(5) { animation-delay: .16s; }
+.stagger > *:nth-child(6) { animation-delay: .20s; } .stagger > *:nth-child(7) { animation-delay: .24s; }
+.stagger > *:nth-child(8) { animation-delay: .28s; }
+@media (prefers-reduced-motion: reduce) { .stagger > *, .skeleton { animation: none; } }

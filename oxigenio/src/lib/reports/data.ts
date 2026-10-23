@@ -2,7 +2,7 @@ import "server-only";
 import type { Prisma, Role, StockOperation } from "@prisma/client";
 import { db } from "@/lib/db";
 import { fmtDate, parseDate, todayStr, fmtDateTime } from "@/lib/format";
-import { cylinderSummary, flowmeterSummary, pendingBySupplier } from "@/lib/stock";
+import { cylinderSummary, flowmeterSummary, pendingBySize } from "@/lib/stock";
 import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "@/lib/labels";
 import { REPORT_TYPES, type ReportParams } from "./params";
 
@@ -14,6 +14,8 @@ export type Block = { heading?: string; columns: Col[]; rows: Cell[][]; totals?:
 export type Report = { title: string; period: string; filters?: string; landscape?: boolean; blocks: Block[]; signatures: string[]; filename: string };
 
 const LIMIT = 5000;
+// Uma única assinatura em todos os documentos: o responsável pelo oxigênio
+const SIGNATURES = ["Responsável pelo oxigênio"];
 const ALL_OPS = Object.keys(OP_LABEL) as StockOperation[];
 const dash = (v?: string | null) => (v && v.trim() ? v : "—");
 const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
@@ -60,12 +62,12 @@ async function inventoryBlocks(): Promise<Block[]> {
   const [{ rows, totals: t }, f] = await Promise.all([cylinderSummary(), flowmeterSummary()]);
   return [
     { heading: "QUANTIDADE DE CILINDROS DE OXIGÊNIO",
-      columns: [{ header: "Categoria", width: "*" }, ...["Hospital: cheios", "Hospital: vazios", "Hospital: indisp.", "Em domicílio", "Com o fornecedor", "Total"].map(h => ({ header: h, align: "right" as const }))],
-      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.hIndisp, r.dom, r.forn, r.total]),
-      totals: ["Total geral", t.hCheio, t.hVazio, t.hIndisp, t.dom, t.forn, t.total],
-      note: "Em domicílio: cilindros entregues e em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
+      columns: [{ header: "Categoria", width: "*" }, ...["Disponíveis (cheios)", "Vazios", "Em domicílio", "Nas enfermarias", "Com o fornecedor", "Indisponíveis", "Total"].map(h => ({ header: h, align: "right" as const }))],
+      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.dom, r.enf, r.forn, r.hIndisp, r.total]),
+      totals: ["Total geral", t.hCheio, t.hVazio, t.dom, t.enf, t.forn, t.hIndisp, t.total],
+      note: "Em domicílio e nas enfermarias: cilindros em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
     { heading: "QUANTIDADE DE FLUXÔMETROS", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }],
-      rows: [["Hospital", f.hospital], ["Domicílio", f.domicilio]], totals: ["Total geral", f.total] },
+      rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias]], totals: ["Total geral", f.total] },
   ];
 }
 
@@ -74,17 +76,16 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
   if (meta.personal && user.role === "CONSULTA") throw new ReportError("Seu perfil não tem acesso a relatórios com dados pessoais de pacientes.", 403);
   const stamp = todayStr().replaceAll("-", "");
   const base = { period: periodLabel(p.from, p.to), filters: filtersLabel(p) };
-  const sigControl = "Responsável pelo controle";
 
   if (p.type === "abastecimento") {
     const rows = await db.stockMovement.findMany({ where: stockWhere(p, ["ABASTECIMENTO"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } });
     const q = (r: (typeof rows)[number], s: string) => (r.cylinderType.size === s ? r.quantity : "");
     const tot = (s: string) => sum(rows.filter(r => r.cylinderType.size === s).map(r => r.quantity));
     return { ...base, title: "CONTROLE DE ABASTECIMENTO DE OXIGÊNIO", filename: `controle-abastecimento-${stamp}`,
-      blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Quem recebeu", width: "*" }, { header: "Fornecedor", width: "*" }, { header: "P", width: 26, align: "center" }, { header: "M", width: 26, align: "center" }, { header: "G", width: 26, align: "center" }, { header: "Total", width: 34, align: "right" }, { header: "Observações", width: "*" }],
-        rows: rows.map(r => [fmtDate(r.occurredAt), r.responsibleName, dash(r.supplier), q(r, "P"), q(r, "M"), q(r, "G"), r.quantity, dash(r.notes)]),
-        totals: ["Total", "", "", tot("P"), tot("M"), tot("G"), sum(rows.map(r => r.quantity)), ""], note: limitNote(rows.length) }],
-      signatures: ["Responsável pelo recebimento", sigControl] };
+      blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Quem recebeu", width: "*" }, { header: "P", width: 26, align: "center" }, { header: "M", width: 26, align: "center" }, { header: "G", width: 26, align: "center" }, { header: "Total", width: 34, align: "right" }, { header: "Observações", width: "*" }],
+        rows: rows.map(r => [fmtDate(r.occurredAt), r.responsibleName, q(r, "P"), q(r, "M"), q(r, "G"), r.quantity, dash(r.notes)]),
+        totals: ["Total", "", tot("P"), tot("M"), tot("G"), sum(rows.map(r => r.quantity)), ""], note: limitNote(rows.length) }],
+      signatures: SIGNATURES };
   }
 
   if (p.type === "domiciliar") {
@@ -97,40 +98,37 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
         rows: rows.map(r => [fmtDate(r.occurredAt), r.patient?.fullName ?? "—", dash(r.patient?.address), dash(r.patient?.neighborhood), dash(r.patient?.village),
           r.operation === "ENTREGA_DOMICILIAR" ? "Entrega" : "Recolhimento", r.cylinderType.size, r.quantity, dash(r.patient?.flowLpm), r.responsibleName, ""]),
         note: [`Total entregue: ${ent} · Total recolhido: ${rec}.`, "Fluxo informado: valor do cadastro do paciente.", limitNote(rows.length)].filter(Boolean).join(" ") }],
-      signatures: ["Responsável pela entrega", sigControl] };
+      signatures: SIGNATURES };
   }
 
   if (p.type === "trocas") {
-    const [rows, pend, sum2] = await Promise.all([
+    const [rows, pend] = await Promise.all([
       db.stockMovement.findMany({ where: stockWhere(p, ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } }),
-      pendingBySupplier(), cylinderSummary()]);
-    const pf = pend.filter(x => x.pending !== 0 && (!p.supplier || x.supplier.toLowerCase().includes(p.supplier.toLowerCase())) && (!p.size || x.size === p.size));
-    return { ...base, title: "TROCAS DE CILINDROS COM FORNECEDORES", filename: `trocas-fornecedores-${stamp}`,
+      pendingBySize()]);
+    const pf = p.size ? pend.filter(x => x.size === p.size) : pend;
+    return { ...base, title: "TROCAS DE CILINDROS COM O FORNECEDOR", filename: `trocas-fornecedor-${stamp}`,
       blocks: [
-        { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Fornecedor", width: "*" }, { header: "Tipo", width: 28, align: "center" }, { header: "Qtd.", width: 30, align: "right" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
-          rows: rows.map(r => [fmtDate(r.occurredAt), r.operation === "ENVIO_FORNECEDOR" ? "Envio de vazios" : "Retorno de cheios", dash(r.supplier), r.cylinderType.size, r.quantity, r.responsibleName, dash(r.notes)]),
-          note: limitNote(rows.length) },
-        { heading: "PENDÊNCIAS ATUAIS POR FORNECEDOR (vazios enviados − cheios recebidos)", columns: [{ header: "Fornecedor", width: "*" }, { header: "Tipo", width: 40, align: "center" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
-          rows: pf.map(x => [x.supplier, x.size, x.sent, x.returned, x.pending]), totals: ["Total pendente", "", sum(pf.map(x => x.sent)), sum(pf.map(x => x.returned)), sum(pf.map(x => x.pending))] },
-        { heading: "VAZIOS ATUALMENTE COM O FORNECEDOR (saldo do estoque)", columns: [{ header: "Categoria", width: "*" }, { header: "Quantidade", width: 90, align: "right" }],
-          rows: sum2.rows.map(r => [r.label, r.forn]), totals: ["Total", sum2.totals.forn] }],
-      signatures: ["Responsável pelo envio/recebimento", sigControl] };
+        { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 55 }, { header: "Operação", width: "*" }, { header: "Tipo", width: 30, align: "center" }, { header: "Qtd.", width: 34, align: "right" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
+          rows: rows.map(r => [fmtDate(r.occurredAt), r.operation === "ENVIO_FORNECEDOR" ? "Envio de vazios" : "Retorno de cheios", r.cylinderType.size, r.quantity, r.responsibleName, dash(r.notes)]), note: limitNote(rows.length) },
+        { heading: "PENDÊNCIAS ATUAIS (vazios enviados − cheios recebidos)", columns: [{ header: "Categoria", width: "*" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
+          rows: pf.map(x => [x.label, x.sent, x.returned, x.pending]), totals: ["Total pendente", sum(pf.map(x => x.sent)), sum(pf.map(x => x.returned)), sum(pf.map(x => x.pending))] }],
+      signatures: SIGNATURES };
   }
 
   if (p.type === "inventario") {
     return { title: "INVENTÁRIO GERAL DE OXIGÊNIO", period: `Data de referência: ${fmtDateTime(new Date())} (posição atual do estoque)`, filename: `inventario-oxigenio-${stamp}`,
-      blocks: await inventoryBlocks(), signatures: ["Responsável pela conferência", sigControl] };
+      blocks: await inventoryBlocks(), signatures: SIGNATURES };
   }
 
   if (p.type === "fluxometros") {
     const [f, rows] = await Promise.all([flowmeterSummary(), db.flowmeterMovement.findMany({ where: flowWhere(p, true), orderBy: ORDER, take: LIMIT })]);
     return { ...base, filters: p.responsible ? `Responsável: ${p.responsible}` : undefined, title: "CONTROLE DE FLUXÔMETROS", filename: `controle-fluxometros-${stamp}`,
       blocks: [
-        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio]], totals: ["Total cadastrado", f.total] },
+        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias]], totals: ["Total cadastrado", f.total] },
         { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: "*" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
           rows: rows.map(r => [fmtDate(r.occurredAt), FM_OP_LABEL[r.operation], r.quantity, `${r.fromLocation ? FM_LOC_LABEL[r.fromLocation] : "—"} → ${r.toLocation ? FM_LOC_LABEL[r.toLocation] : "—"}`, r.responsibleName, dash(r.notes)]),
           note: limitNote(rows.length) }],
-      signatures: ["Responsável pela conferência", sigControl] };
+      signatures: SIGNATURES };
   }
 
   if (p.type === "movimentacoes") {
@@ -147,7 +145,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
     return { ...base, landscape: true, title: "HISTÓRICO DE MOVIMENTAÇÕES DE OXIGÊNIO", filename: `historico-movimentacoes-${stamp}`,
       blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Registro", width: 56 }, { header: "Operação", width: 130 }, { header: "Tipo", width: 28, align: "center" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: 150 }, { header: "Fornecedor / Paciente", width: 100 }, { header: "Responsável", width: "*" }, { header: "Situação", width: 56 }],
         rows: all.map(a => a.cells), note: "Movimentações estornadas e seus estornos aparecem para rastreabilidade e se anulam no saldo." + (limitNote(Math.max(sm.length, fm.length)) ? " " + limitNote(Math.max(sm.length, fm.length)) : "") }],
-      signatures: [sigControl, "Responsável pela conferência"] };
+      signatures: SIGNATURES };
   }
 
   // consolidado
@@ -155,7 +153,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
     inventoryBlocks(),
     db.stockMovement.groupBy({ by: ["operation"], where: stockWhere(p, ALL_OPS, true), _sum: { quantity: true }, _count: { _all: true } }),
     db.flowmeterMovement.groupBy({ by: ["operation"], where: flowWhere(p, true), _sum: { quantity: true }, _count: { _all: true } }),
-    pendingBySupplier(), db.patient.count({ where: { status: "ATIVO" } })]);
+    pendingBySize(), db.patient.count({ where: { status: "ATIVO" } })]);
   const pf = pend.filter(x => x.pending !== 0);
   return { ...base, title: "RELATÓRIO CONSOLIDADO DO PERÍODO", filename: `consolidado-periodo-${stamp}`,
     blocks: [
@@ -164,7 +162,6 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
         rows: g.map(x => [OP_LABEL[x.operation], x._count._all, x._sum.quantity ?? 0]) },
       { heading: "MOVIMENTAÇÕES DO PERÍODO — FLUXÔMETROS", columns: [{ header: "Operação", width: "*" }, { header: "Registros", width: 70, align: "right" }, { header: "Quantidade", width: 80, align: "right" }],
         rows: fg.map(x => [FM_OP_LABEL[x.operation], x._count._all, x._sum.quantity ?? 0]) },
-      { heading: "TROCAS PENDENTES POR FORNECEDOR", columns: [{ header: "Fornecedor", width: "*" }, { header: "Tipo", width: 40, align: "center" }, { header: "Pendente", width: 80, align: "right" }],
-        rows: pf.map(x => [x.supplier, x.size, x.pending]) }],
-    signatures: ["Responsável pela conferência", sigControl] };
+      { heading: "TROCAS PENDENTES COM O FORNECEDOR", columns: [{ header: "Categoria", width: "*" }, { header: "Pendente", width: 80, align: "right" }], rows: pend.map(x => [x.label, x.pending]), totals: ["Total pendente", sum(pend.map(x => x.pending))] }],
+    signatures: SIGNATURES };
 }
