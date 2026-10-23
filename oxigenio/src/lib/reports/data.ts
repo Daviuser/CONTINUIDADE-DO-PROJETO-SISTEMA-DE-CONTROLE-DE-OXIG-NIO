@@ -1,0 +1,170 @@
+import "server-only";
+import type { Prisma, Role, StockOperation } from "@prisma/client";
+import { db } from "@/lib/db";
+import { fmtDate, parseDate, todayStr, fmtDateTime } from "@/lib/format";
+import { cylinderSummary, flowmeterSummary, pendingBySupplier } from "@/lib/stock";
+import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "@/lib/labels";
+import { REPORT_TYPES, type ReportParams } from "./params";
+
+export class ReportError extends Error { constructor(msg: string, public status = 400) { super(msg); } }
+
+export type Cell = string | number;
+export type Col = { header: string; width?: number | "*" | "auto"; align?: "left" | "right" | "center" };
+export type Block = { heading?: string; columns: Col[]; rows: Cell[][]; totals?: Cell[]; note?: string };
+export type Report = { title: string; period: string; filters?: string; landscape?: boolean; blocks: Block[]; signatures: string[]; filename: string };
+
+const LIMIT = 5000;
+const ALL_OPS = Object.keys(OP_LABEL) as StockOperation[];
+const dash = (v?: string | null) => (v && v.trim() ? v : "—");
+const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+const limitNote = (n: number) => (n >= LIMIT ? `Exibindo os primeiros ${LIMIT} registros; reduza o período para ver todos.` : undefined);
+const loc = (l?: { code: string } | null, c?: string | null) => (l ? `${LOC_LABEL[l.code]}${c ? ` (${COND_LABEL[c].toLowerCase()})` : ""}` : "—");
+
+function periodLabel(from?: string, to?: string) {
+  if (from && to) return `Período: ${fmtDate(parseDate(from))} a ${fmtDate(parseDate(to))}`;
+  if (from) return `Período: a partir de ${fmtDate(parseDate(from))}`;
+  if (to) return `Período: até ${fmtDate(parseDate(to))}`;
+  return "Período: todo o histórico registrado";
+}
+function filtersLabel(p: ReportParams) {
+  return [p.size ? `Categoria: ${SIZE_LABEL[p.size]}` : "", p.responsible ? `Responsável: ${p.responsible}` : "", p.supplier ? `Fornecedor: ${p.supplier}` : "",
+    p.bairro ? `Bairro: ${p.bairro}` : "", p.povoado ? `Povoado: ${p.povoado}` : "", p.patient ? "Paciente selecionado" : ""].filter(Boolean).join(" · ") || undefined;
+}
+
+function dateFilter(p: ReportParams) {
+  return { ...(p.from ? { gte: parseDate(p.from) } : {}), ...(p.to ? { lte: parseDate(p.to) } : {}) };
+}
+function stockWhere(p: ReportParams, ops: StockOperation[], validOnly: boolean): Prisma.StockMovementWhereInput {
+  const w: Prisma.StockMovementWhereInput = { operation: { in: ops } };
+  if (validOnly) { w.status = "CONFIRMADA"; w.reversalOfId = null; }
+  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  if (p.size) w.cylinderType = { size: p.size };
+  if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
+  if (p.supplier) w.supplier = { contains: p.supplier, mode: "insensitive" };
+  if (p.patient) w.patientId = p.patient;
+  if (p.bairro || p.povoado) w.patient = {
+    ...(p.bairro ? { neighborhood: { contains: p.bairro, mode: "insensitive" as const } } : {}),
+    ...(p.povoado ? { village: { contains: p.povoado, mode: "insensitive" as const } } : {}) };
+  return w;
+}
+function flowWhere(p: ReportParams, validOnly: boolean): Prisma.FlowmeterMovementWhereInput {
+  const w: Prisma.FlowmeterMovementWhereInput = {};
+  if (validOnly) { w.status = "CONFIRMADA"; w.reversalOfId = null; }
+  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
+  return w;
+}
+const ORDER = [{ occurredAt: "asc" as const }, { createdAt: "asc" as const }];
+
+async function inventoryBlocks(): Promise<Block[]> {
+  const [{ rows, totals: t }, f] = await Promise.all([cylinderSummary(), flowmeterSummary()]);
+  return [
+    { heading: "QUANTIDADE DE CILINDROS DE OXIGÊNIO",
+      columns: [{ header: "Categoria", width: "*" }, ...["Hospital: cheios", "Hospital: vazios", "Hospital: indisp.", "Em domicílio", "Com o fornecedor", "Total"].map(h => ({ header: h, align: "right" as const }))],
+      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.hIndisp, r.dom, r.forn, r.total]),
+      totals: ["Total geral", t.hCheio, t.hVazio, t.hIndisp, t.dom, t.forn, t.total],
+      note: "Em domicílio: cilindros entregues e em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
+    { heading: "QUANTIDADE DE FLUXÔMETROS", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }],
+      rows: [["Hospital", f.hospital], ["Domicílio", f.domicilio]], totals: ["Total geral", f.total] },
+  ];
+}
+
+export async function buildReport(p: ReportParams, user: { role: Role; name: string }): Promise<Report> {
+  const meta = REPORT_TYPES.find(t => t.id === p.type)!;
+  if (meta.personal && user.role === "CONSULTA") throw new ReportError("Seu perfil não tem acesso a relatórios com dados pessoais de pacientes.", 403);
+  const stamp = todayStr().replaceAll("-", "");
+  const base = { period: periodLabel(p.from, p.to), filters: filtersLabel(p) };
+  const sigControl = "Responsável pelo controle";
+
+  if (p.type === "abastecimento") {
+    const rows = await db.stockMovement.findMany({ where: stockWhere(p, ["ABASTECIMENTO"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } });
+    const q = (r: (typeof rows)[number], s: string) => (r.cylinderType.size === s ? r.quantity : "");
+    const tot = (s: string) => sum(rows.filter(r => r.cylinderType.size === s).map(r => r.quantity));
+    return { ...base, title: "CONTROLE DE ABASTECIMENTO DE OXIGÊNIO", filename: `controle-abastecimento-${stamp}`,
+      blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Quem recebeu", width: "*" }, { header: "Fornecedor", width: "*" }, { header: "P", width: 26, align: "center" }, { header: "M", width: 26, align: "center" }, { header: "G", width: 26, align: "center" }, { header: "Total", width: 34, align: "right" }, { header: "Observações", width: "*" }],
+        rows: rows.map(r => [fmtDate(r.occurredAt), r.responsibleName, dash(r.supplier), q(r, "P"), q(r, "M"), q(r, "G"), r.quantity, dash(r.notes)]),
+        totals: ["Total", "", "", tot("P"), tot("M"), tot("G"), sum(rows.map(r => r.quantity)), ""], note: limitNote(rows.length) }],
+      signatures: ["Responsável pelo recebimento", sigControl] };
+  }
+
+  if (p.type === "domiciliar") {
+    const rows = await db.stockMovement.findMany({ where: stockWhere(p, ["ENTREGA_DOMICILIAR", "RECOLHIMENTO_DOMICILIAR"], true), orderBy: ORDER, take: LIMIT,
+      include: { cylinderType: true, patient: { select: { fullName: true, address: true, neighborhood: true, village: true, flowLpm: true } } } });
+    const ent = sum(rows.filter(r => r.operation === "ENTREGA_DOMICILIAR").map(r => r.quantity));
+    const rec = sum(rows.filter(r => r.operation === "RECOLHIMENTO_DOMICILIAR").map(r => r.quantity));
+    return { ...base, landscape: true, title: "CONTROLE DE PACIENTES EM USO DE OXIGÊNIO EM DOMICÍLIO", filename: `controle-domiciliar-${stamp}`,
+      blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Nome do paciente", width: 120 }, { header: "Endereço", width: 120 }, { header: "Bairro", width: 62 }, { header: "Povoado", width: 62 }, { header: "Operação", width: 62 }, { header: "Tipo", width: 26, align: "center" }, { header: "Qtd.", width: 26, align: "right" }, { header: "Fluxo informado", width: 52 }, { header: "Responsável", width: 76 }, { header: "Assinatura", width: "*" }],
+        rows: rows.map(r => [fmtDate(r.occurredAt), r.patient?.fullName ?? "—", dash(r.patient?.address), dash(r.patient?.neighborhood), dash(r.patient?.village),
+          r.operation === "ENTREGA_DOMICILIAR" ? "Entrega" : "Recolhimento", r.cylinderType.size, r.quantity, dash(r.patient?.flowLpm), r.responsibleName, ""]),
+        note: [`Total entregue: ${ent} · Total recolhido: ${rec}.`, "Fluxo informado: valor do cadastro do paciente.", limitNote(rows.length)].filter(Boolean).join(" ") }],
+      signatures: ["Responsável pela entrega", sigControl] };
+  }
+
+  if (p.type === "trocas") {
+    const [rows, pend, sum2] = await Promise.all([
+      db.stockMovement.findMany({ where: stockWhere(p, ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } }),
+      pendingBySupplier(), cylinderSummary()]);
+    const pf = pend.filter(x => x.pending !== 0 && (!p.supplier || x.supplier.toLowerCase().includes(p.supplier.toLowerCase())) && (!p.size || x.size === p.size));
+    return { ...base, title: "TROCAS DE CILINDROS COM FORNECEDORES", filename: `trocas-fornecedores-${stamp}`,
+      blocks: [
+        { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Fornecedor", width: "*" }, { header: "Tipo", width: 28, align: "center" }, { header: "Qtd.", width: 30, align: "right" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
+          rows: rows.map(r => [fmtDate(r.occurredAt), r.operation === "ENVIO_FORNECEDOR" ? "Envio de vazios" : "Retorno de cheios", dash(r.supplier), r.cylinderType.size, r.quantity, r.responsibleName, dash(r.notes)]),
+          note: limitNote(rows.length) },
+        { heading: "PENDÊNCIAS ATUAIS POR FORNECEDOR (vazios enviados − cheios recebidos)", columns: [{ header: "Fornecedor", width: "*" }, { header: "Tipo", width: 40, align: "center" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
+          rows: pf.map(x => [x.supplier, x.size, x.sent, x.returned, x.pending]), totals: ["Total pendente", "", sum(pf.map(x => x.sent)), sum(pf.map(x => x.returned)), sum(pf.map(x => x.pending))] },
+        { heading: "VAZIOS ATUALMENTE COM O FORNECEDOR (saldo do estoque)", columns: [{ header: "Categoria", width: "*" }, { header: "Quantidade", width: 90, align: "right" }],
+          rows: sum2.rows.map(r => [r.label, r.forn]), totals: ["Total", sum2.totals.forn] }],
+      signatures: ["Responsável pelo envio/recebimento", sigControl] };
+  }
+
+  if (p.type === "inventario") {
+    return { title: "INVENTÁRIO GERAL DE OXIGÊNIO", period: `Data de referência: ${fmtDateTime(new Date())} (posição atual do estoque)`, filename: `inventario-oxigenio-${stamp}`,
+      blocks: await inventoryBlocks(), signatures: ["Responsável pela conferência", sigControl] };
+  }
+
+  if (p.type === "fluxometros") {
+    const [f, rows] = await Promise.all([flowmeterSummary(), db.flowmeterMovement.findMany({ where: flowWhere(p, true), orderBy: ORDER, take: LIMIT })]);
+    return { ...base, filters: p.responsible ? `Responsável: ${p.responsible}` : undefined, title: "CONTROLE DE FLUXÔMETROS", filename: `controle-fluxometros-${stamp}`,
+      blocks: [
+        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio]], totals: ["Total cadastrado", f.total] },
+        { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: "*" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
+          rows: rows.map(r => [fmtDate(r.occurredAt), FM_OP_LABEL[r.operation], r.quantity, `${r.fromLocation ? FM_LOC_LABEL[r.fromLocation] : "—"} → ${r.toLocation ? FM_LOC_LABEL[r.toLocation] : "—"}`, r.responsibleName, dash(r.notes)]),
+          note: limitNote(rows.length) }],
+      signatures: ["Responsável pela conferência", sigControl] };
+  }
+
+  if (p.type === "movimentacoes") {
+    const [sm, fm] = await Promise.all([
+      db.stockMovement.findMany({ where: stockWhere(p, ALL_OPS, false), orderBy: ORDER, take: LIMIT,
+        include: { cylinderType: true, fromLocation: true, toLocation: true, patient: { select: { fullName: true } } } }),
+      p.size || p.supplier || p.patient || p.bairro || p.povoado ? Promise.resolve([]) : db.flowmeterMovement.findMany({ where: flowWhere(p, false), orderBy: ORDER, take: LIMIT })]);
+    const personal = user.role !== "CONSULTA";
+    const status = (s: string, rev: string | null) => (rev ? "Estorno" : s === "ESTORNADA" ? "Estornada" : "Confirmada");
+    const all = [
+      ...sm.map(m => ({ at: m.occurredAt, c: m.createdAt, cells: [fmtDate(m.occurredAt), "Cilindros", OP_LABEL[m.operation], m.cylinderType.size, m.quantity, `${loc(m.fromLocation, m.fromCondition)} → ${loc(m.toLocation, m.toCondition)}`, personal ? (m.patient?.fullName ?? m.supplier ?? "—") : (m.supplier ?? "—"), m.responsibleName, status(m.status, m.reversalOfId)] as Cell[] })),
+      ...fm.map(m => ({ at: m.occurredAt, c: m.createdAt, cells: [fmtDate(m.occurredAt), "Fluxômetros", FM_OP_LABEL[m.operation], "—", m.quantity, `${m.fromLocation ? FM_LOC_LABEL[m.fromLocation] : "—"} → ${m.toLocation ? FM_LOC_LABEL[m.toLocation] : "—"}`, "—", m.responsibleName, status(m.status, m.reversalOfId)] as Cell[] })),
+    ].sort((a, b) => a.at.getTime() - b.at.getTime() || a.c.getTime() - b.c.getTime());
+    return { ...base, landscape: true, title: "HISTÓRICO DE MOVIMENTAÇÕES DE OXIGÊNIO", filename: `historico-movimentacoes-${stamp}`,
+      blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Registro", width: 56 }, { header: "Operação", width: 130 }, { header: "Tipo", width: 28, align: "center" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: 150 }, { header: "Fornecedor / Paciente", width: 100 }, { header: "Responsável", width: "*" }, { header: "Situação", width: 56 }],
+        rows: all.map(a => a.cells), note: "Movimentações estornadas e seus estornos aparecem para rastreabilidade e se anulam no saldo." + (limitNote(Math.max(sm.length, fm.length)) ? " " + limitNote(Math.max(sm.length, fm.length)) : "") }],
+      signatures: [sigControl, "Responsável pela conferência"] };
+  }
+
+  // consolidado
+  const [inv, g, fg, pend, ativos] = await Promise.all([
+    inventoryBlocks(),
+    db.stockMovement.groupBy({ by: ["operation"], where: stockWhere(p, ALL_OPS, true), _sum: { quantity: true }, _count: { _all: true } }),
+    db.flowmeterMovement.groupBy({ by: ["operation"], where: flowWhere(p, true), _sum: { quantity: true }, _count: { _all: true } }),
+    pendingBySupplier(), db.patient.count({ where: { status: "ATIVO" } })]);
+  const pf = pend.filter(x => x.pending !== 0);
+  return { ...base, title: "RELATÓRIO CONSOLIDADO DO PERÍODO", filename: `consolidado-periodo-${stamp}`,
+    blocks: [
+      { ...inv[0], heading: "POSIÇÃO ATUAL — CILINDROS" }, { ...inv[1], heading: "POSIÇÃO ATUAL — FLUXÔMETROS", note: `Pacientes ativos em oxigenoterapia domiciliar: ${ativos}.` },
+      { heading: "MOVIMENTAÇÕES DO PERÍODO — CILINDROS", columns: [{ header: "Operação", width: "*" }, { header: "Registros", width: 70, align: "right" }, { header: "Quantidade", width: 80, align: "right" }],
+        rows: g.map(x => [OP_LABEL[x.operation], x._count._all, x._sum.quantity ?? 0]) },
+      { heading: "MOVIMENTAÇÕES DO PERÍODO — FLUXÔMETROS", columns: [{ header: "Operação", width: "*" }, { header: "Registros", width: 70, align: "right" }, { header: "Quantidade", width: 80, align: "right" }],
+        rows: fg.map(x => [FM_OP_LABEL[x.operation], x._count._all, x._sum.quantity ?? 0]) },
+      { heading: "TROCAS PENDENTES POR FORNECEDOR", columns: [{ header: "Fornecedor", width: "*" }, { header: "Tipo", width: 40, align: "center" }, { header: "Pendente", width: 80, align: "right" }],
+        rows: pf.map(x => [x.supplier, x.size, x.pending]) }],
+    signatures: ["Responsável pela conferência", sigControl] };
+}
