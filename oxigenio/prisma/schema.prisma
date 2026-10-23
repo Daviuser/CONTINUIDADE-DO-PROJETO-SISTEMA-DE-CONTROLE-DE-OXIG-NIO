@@ -209,11 +209,13 @@ enum StockOperation {
   RETORNO_FORNECEDOR
   BAIXA_INDISPONIVEL
   RETORNO_DISPONIVEL
+  AJUSTE_ESTOQUE
 }
 
 enum FlowmeterLocation {
   HOSPITAL
   DOMICILIO
+  ENFERMARIAS
 }
 
 enum FlowmeterOperation {
@@ -221,4 +223,5 @@ enum FlowmeterOperation {
   ENVIO_DOMICILIO
   RETORNO_DOMICILIO
   BAIXA
+  AJUSTE
 }
