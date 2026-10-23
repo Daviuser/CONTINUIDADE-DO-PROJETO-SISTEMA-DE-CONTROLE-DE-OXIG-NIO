@@ -8,8 +8,8 @@ export default {
       grafite: { 700: "#2b3a4a", 900: "#1c2733" },
     },
     fontFamily: {
-      sans: ["var(--font-inter)", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
-      display: ["var(--font-manrope)", "var(--font-inter)", "system-ui", "sans-serif"],
+      sans: ["system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
+      display: ["system-ui", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "sans-serif"],
     },
     borderColor: { DEFAULT: "#e2e8e4" },
     boxShadow: {
