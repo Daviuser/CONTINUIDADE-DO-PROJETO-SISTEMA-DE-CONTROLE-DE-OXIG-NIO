@@ -11,10 +11,13 @@
     "db:seed": "tsx prisma/seed.ts",
     "test": "vitest run"
   },
-  "prisma": { "seed": "tsx prisma/seed.ts" },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
   "dependencies": {
     "@node-rs/argon2": "^2.0.2",
     "@prisma/client": "^6.0.0",
+    "@vercel/blob": "^2.8.2",
     "next": "^15.0.0",
     "pdfmake": "^0.2.12",
     "react": "^19.0.0",
