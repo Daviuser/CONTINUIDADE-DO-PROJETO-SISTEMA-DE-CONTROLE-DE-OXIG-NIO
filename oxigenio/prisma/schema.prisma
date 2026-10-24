@@ -1,174 +1,10 @@
 generator client {
   provider = "prisma-client-js"
 }
-
 datasource db {
   provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
-}
-
-model User {
-  id           String    @id @default(cuid())
-  name         String
-  email        String    @unique
-  jobTitle     String?
-  passwordHash String
-  role         Role      @default(CONSULTA)
-  active       Boolean   @default(true)
-  failedLogins Int       @default(0)
-  lockedUntil  DateTime?
-  createdAt    DateTime  @default(now())
-  sessions     Session[]
-}
-
-model Session {
-  id         String   @id @default(cuid())
-  tokenHash  String   @unique
-  userId     String
-  createdAt  DateTime @default(now())
-  lastSeenAt DateTime @default(now())
-  expiresAt  DateTime
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model Location {
-  id            String          @id @default(cuid())
-  code          String          @unique
-  name          String
-  active        Boolean         @default(true)
-  balances      StockBalance[]
-  movementsFrom StockMovement[] @relation("MovFrom")
-  movementsTo   StockMovement[] @relation("MovTo")
-}
-
-model CylinderType {
-  id             String          @id @default(cuid())
-  size           CylinderSize    @unique
-  label          String
-  capacityLiters Decimal?        @db.Decimal(8, 2)
-  balances       StockBalance[]
-  movements      StockMovement[]
-}
-
-model StockBalance {
-  locationId     String
-  cylinderTypeId String
-  condition      StockCondition
-  quantity       Int            @default(0)
-  cylinderType   CylinderType   @relation(fields: [cylinderTypeId], references: [id])
-  location       Location       @relation(fields: [locationId], references: [id])
-
-  @@id([locationId, cylinderTypeId, condition])
-}
-
-model StockMovement {
-  id              String          @id @default(cuid())
-  operation       StockOperation
-  status          MovementStatus  @default(CONFIRMADA)
-  cylinderTypeId  String
-  quantity        Int
-  fromLocationId  String?
-  fromCondition   StockCondition?
-  toLocationId    String?
-  toCondition     StockCondition?
-  occurredAt      DateTime
-  supplier        String?
-  patientId       String?
-  responsibleName String
-  notes           String?
-  requestKey      String?         @unique
-  reversalOfId    String?         @unique
-  reversalReason  String?
-  createdById     String
-  createdAt       DateTime        @default(now())
-  cylinderType    CylinderType    @relation(fields: [cylinderTypeId], references: [id])
-  fromLocation    Location?       @relation("MovFrom", fields: [fromLocationId], references: [id])
-  patient         Patient?        @relation(fields: [patientId], references: [id])
-  toLocation      Location?       @relation("MovTo", fields: [toLocationId], references: [id])
-
-  @@index([operation, occurredAt])
-  @@index([patientId, occurredAt])
-}
-
-model Patient {
-  id            String          @id @default(cuid())
-  fullName      String
-  phone         String?
-  address       String
-  neighborhood  String?
-  village       String?
-  reference     String?
-  cylinderSize  CylinderSize?
-  cylinderQty   Int             @default(0)
-  flowLpm       String?
-  startDate     DateTime
-  endDate       DateTime?
-  status        RecordStatus    @default(ATIVO)
-  notes         String?
-  responsibleId String?
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
-  movements     StockMovement[]
-
-  @@index([fullName])
-  @@index([neighborhood])
-  @@index([village])
-}
-
-model FlowmeterBalance {
-  location FlowmeterLocation @id
-  quantity Int               @default(0)
-}
-
-model FlowmeterMovement {
-  id              String             @id @default(cuid())
-  operation       FlowmeterOperation
-  status          MovementStatus     @default(CONFIRMADA)
-  quantity        Int
-  fromLocation    FlowmeterLocation?
-  toLocation      FlowmeterLocation?
-  occurredAt      DateTime
-  responsibleName String
-  notes           String?
-  requestKey      String?            @unique
-  reversalOfId    String?            @unique
-  reversalReason  String?
-  createdById     String
-  createdAt       DateTime           @default(now())
-
-  @@index([occurredAt])
-}
-
-model IssuedReport {
-  id         String   @id @default(cuid())
-  type       String
-  params     Json
-  issuedById String
-  issuedAt   DateTime @default(now())
-}
-
-model AuditLog {
-  id       String   @id @default(cuid())
-  userId   String?
-  action   String
-  entity   String
-  entityId String?
-  before   Json?
-  after    Json?
-  reason   String?
-  at       DateTime @default(now())
-
-  @@index([entity, entityId])
-  @@index([at])
-}
-
-model playing_with_neon {
-  id    Int    @id @default(autoincrement())
-  name  String
-  value Float? @db.Real
 }
 
 enum Role {
@@ -199,7 +35,6 @@ enum StockCondition {
   VAZIO
   INDISPONIVEL
 }
-
 enum StockOperation {
   ENTRADA_INICIAL
   ABASTECIMENTO
@@ -210,8 +45,8 @@ enum StockOperation {
   BAIXA_INDISPONIVEL
   RETORNO_DISPONIVEL
   AJUSTE_ESTOQUE
+  MAQUINA_INTUBACAO
 }
-
 enum FlowmeterLocation {
   HOSPITAL
   DOMICILIO
@@ -224,4 +59,235 @@ enum FlowmeterOperation {
   RETORNO_DOMICILIO
   BAIXA
   AJUSTE
+  MAQUINA
+}
+
+enum MachineItemKind {
+  CILINDRO_P
+  CILINDRO_M
+  CILINDRO_G
+  FLUXOMETRO
+  FLUXOMETRO_INTUBACAO
+}
+
+enum MachineOperation {
+  ENTRADA
+  RETIRADA
+  TRANSFERENCIA
+  DEVOLUCAO
+  AJUSTE
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  jobTitle    String?
+  passwordHash String
+  role        Role     @default(CONSULTA)
+  active      Boolean  @default(true)
+  failedLogins Int     @default(0)
+  lockedUntil DateTime?
+  createdAt   DateTime @default(now())
+  sessions    Session[]
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  expiresAt  DateTime
+  @@index([userId])
+}
+
+// HOSPITAL, DOMICILIO e TRANSPORTE (exibido como "Com o fornecedor")
+model Location {
+  id        String  @id @default(cuid())
+  code      String  @unique
+  name      String
+  active    Boolean @default(true)
+  balances  StockBalance[]
+  movementsFrom StockMovement[] @relation("MovFrom")
+  movementsTo   StockMovement[] @relation("MovTo")
+  machines      Machine[]
+}
+
+model CylinderType {
+  id    String       @id @default(cuid())
+  size  CylinderSize @unique
+  label String
+  capacityLiters Decimal? @db.Decimal(8,2)
+  balances  StockBalance[]
+  movements StockMovement[]
+}
+
+// Saldo por quantidade (tamanho x local x estado). Só muda dentro de transação ao registrar movimentação.
+model StockBalance {
+  locationId     String
+  cylinderTypeId String
+  condition      StockCondition
+  quantity       Int @default(0)
+  location       Location     @relation(fields: [locationId], references: [id])
+  cylinderType   CylinderType @relation(fields: [cylinderTypeId], references: [id])
+  @@id([locationId, cylinderTypeId, condition])
+}
+
+// Livro-razão: registros confirmados nunca são apagados; correção = estorno com justificativa.
+model StockMovement {
+  id             String         @id @default(cuid())
+  operation      StockOperation
+  status         MovementStatus @default(CONFIRMADA)
+  cylinderTypeId String
+  cylinderType   CylinderType   @relation(fields: [cylinderTypeId], references: [id])
+  quantity       Int
+  fromLocationId String?
+  fromLocation   Location?      @relation("MovFrom", fields: [fromLocationId], references: [id])
+  fromCondition  StockCondition?
+  toLocationId   String?
+  toLocation     Location?      @relation("MovTo", fields: [toLocationId], references: [id])
+  toCondition    StockCondition?
+  occurredAt     DateTime
+  supplier       String?
+  patientId      String?
+  patient        Patient?       @relation(fields: [patientId], references: [id])
+  responsibleName String
+  notes          String?
+  requestKey     String?        @unique
+  reversalOfId   String?        @unique
+  reversalReason String?
+  receipt        ReceiptPhoto?
+  createdById    String
+  createdAt      DateTime       @default(now())
+  @@index([operation, occurredAt])
+  @@index([patientId, occurredAt])
+}
+
+model Patient {
+  id            String       @id @default(cuid())
+  fullName      String
+  phone         String?
+  address       String
+  neighborhood  String?
+  village       String?
+  reference     String?
+  cylinderSize  CylinderSize?
+  cylinderQty   Int          @default(0)
+  flowLpm       String?
+  startDate     DateTime
+  endDate       DateTime?
+  status        RecordStatus @default(ATIVO)
+  notes         String?
+  responsibleId String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  movements     StockMovement[]
+  @@index([fullName])
+  @@index([neighborhood])
+  @@index([village])
+}
+
+model FlowmeterBalance {
+  location FlowmeterLocation @id
+  quantity Int @default(0)
+}
+
+model FlowmeterMovement {
+  id              String             @id @default(cuid())
+  operation       FlowmeterOperation
+  status          MovementStatus     @default(CONFIRMADA)
+  quantity        Int
+  fromLocation    FlowmeterLocation?
+  toLocation      FlowmeterLocation?
+  occurredAt      DateTime
+  responsibleName String
+  notes           String?
+  requestKey      String?            @unique
+  reversalOfId    String?            @unique
+  reversalReason  String?
+  createdById     String
+  createdAt       DateTime           @default(now())
+  @@index([occurredAt])
+}
+
+model IssuedReport {
+  id        String   @id @default(cuid())
+  type      String
+  params    Json
+  issuedById String
+  issuedAt  DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  before    Json?
+  after     Json?
+  reason    String?
+  at        DateTime @default(now())
+  @@index([entity, entityId])
+  @@index([at])
+}
+
+// Foto do recibo do fornecedor: o arquivo fica no Vercel Blob PRIVADO; aqui só a referência e metadados.
+model ReceiptPhoto {
+  id           String         @id @default(cuid())
+  movementId   String         @unique
+  movement     StockMovement  @relation(fields: [movementId], references: [id])
+  url          String
+  pathname     String
+  contentType  String
+  size         Int
+  uploadedById String
+  createdAt    DateTime       @default(now())
+}
+
+// Máquinas/equipamentos de intubação. Os itens da máquina saem do estoque central (ou entram como novos) por movimentação.
+model Machine {
+  id         String   @id @default(cuid())
+  name       String
+  code       String?  @unique
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id])
+  notes      String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  items      MachineItem[]
+  movements  MachineMovement[] @relation("MachineSource")
+  received   MachineMovement[] @relation("MachineDest")
+}
+
+model MachineItem {
+  machineId String
+  kind      MachineItemKind
+  quantity  Int             @default(0)
+  machine   Machine         @relation(fields: [machineId], references: [id])
+  @@id([machineId, kind])
+}
+
+model MachineMovement {
+  id              String           @id @default(cuid())
+  machineId       String
+  machine         Machine          @relation("MachineSource", fields: [machineId], references: [id])
+  toMachineId     String?
+  toMachine       Machine?         @relation("MachineDest", fields: [toMachineId], references: [id])
+  operation       MachineOperation
+  kind            MachineItemKind
+  quantity        Int
+  delta           Int
+  detail          String?
+  occurredAt      DateTime
+  responsibleName String
+  notes           String?
+  requestKey      String?          @unique
+  createdById     String
+  createdAt       DateTime         @default(now())
+  @@index([machineId, occurredAt])
+  @@index([toMachineId])
 }

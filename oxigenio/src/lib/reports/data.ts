@@ -5,13 +5,15 @@ import { fmtDate, parseDate, todayStr, fmtDateTime } from "@/lib/format";
 import { cylinderSummary, flowmeterSummary, pendingBySize } from "@/lib/stock";
 import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "@/lib/labels";
 import { REPORT_TYPES, type ReportParams } from "./params";
+import { receiptDataUrl } from "@/lib/receipts";
 
 export class ReportError extends Error { constructor(msg: string, public status = 400) { super(msg); } }
 
 export type Cell = string | number;
 export type Col = { header: string; width?: number | "*" | "auto"; align?: "left" | "right" | "center" };
 export type Block = { heading?: string; columns: Col[]; rows: Cell[][]; totals?: Cell[]; note?: string };
-export type Report = { title: string; period: string; filters?: string; landscape?: boolean; blocks: Block[]; signatures: string[]; filename: string };
+export type ReceiptItem = { caption: string; image?: string; note?: string };
+export type Report = { title: string; period: string; filters?: string; landscape?: boolean; blocks: Block[]; signatures: string[]; filename: string; receipts?: ReceiptItem[] };
 
 const LIMIT = 5000;
 // Uma única assinatura em todos os documentos: o responsável pelo oxigênio
@@ -58,16 +60,31 @@ function flowWhere(p: ReportParams, validOnly: boolean): Prisma.FlowmeterMovemen
 }
 const ORDER = [{ occurredAt: "asc" as const }, { createdAt: "asc" as const }];
 
+// Recibos do fornecedor (foto) ligados a cada recebimento. Só JPEG/PNG podem ser embutidos no PDF; limite de 25 fotos por documento.
+const MAX_RECEIPTS = 25;
+async function receiptItems(rows: { occurredAt: Date; responsibleName: string; quantity: number; notes: string | null; cylinderType: { size: string }; receipt: { pathname: string; contentType: string } | null }[]): Promise<ReceiptItem[]> {
+  const withPhoto = rows.filter(r => r.receipt);
+  const items = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async (r): Promise<ReceiptItem> => {
+    const caption = `Recebimento de ${fmtDate(r.occurredAt)} · Cilindros ${r.cylinderType.size}: ${r.quantity} · Recebido por ${r.responsibleName}${r.notes ? " · Obs.: " + r.notes : ""}`;
+    const rc = r.receipt!;
+    if (rc.contentType !== "image/jpeg" && rc.contentType !== "image/png") return { caption, note: "Foto em formato que o PDF não suporta (WEBP). Consulte o recibo no sistema." };
+    const image = await receiptDataUrl(rc.pathname, rc.contentType);
+    return image ? { caption, image } : { caption, note: "Não foi possível carregar a foto do recibo neste momento." };
+  }));
+  if (withPhoto.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${withPhoto.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" } as ReceiptItem);
+  return items;
+}
+
 async function inventoryBlocks(): Promise<Block[]> {
   const [{ rows, totals: t }, f] = await Promise.all([cylinderSummary(), flowmeterSummary()]);
   return [
     { heading: "QUANTIDADE DE CILINDROS DE OXIGÊNIO",
-      columns: [{ header: "Categoria", width: "*" }, ...["Disponíveis (cheios)", "Vazios", "Em domicílio", "Nas enfermarias", "Com o fornecedor", "Indisponíveis", "Total"].map(h => ({ header: h, align: "right" as const }))],
-      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.dom, r.enf, r.forn, r.hIndisp, r.total]),
-      totals: ["Total geral", t.hCheio, t.hVazio, t.dom, t.enf, t.forn, t.hIndisp, t.total],
-      note: "Em domicílio e nas enfermarias: cilindros em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
+      columns: [{ header: "Categoria", width: "*" }, ...["Disponíveis (cheios)", "Vazios", "Em domicílio", "Nas enfermarias", "Nas máquinas", "Com o fornecedor", "Indisponíveis", "Total"].map(h => ({ header: h, align: "right" as const }))],
+      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.dom, r.enf, r.maq, r.forn, r.hIndisp, r.total]),
+      totals: ["Total geral", t.hCheio, t.hVazio, t.dom, t.enf, t.maq, t.forn, t.hIndisp, t.total],
+      note: "Em domicílio, nas enfermarias e nas máquinas de intubação: cilindros em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
     { heading: "QUANTIDADE DE FLUXÔMETROS", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }],
-      rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias]], totals: ["Total geral", f.total] },
+      rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub]], totals: ["Total geral", f.total] },
   ];
 }
 
@@ -78,14 +95,14 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
   const base = { period: periodLabel(p.from, p.to), filters: filtersLabel(p) };
 
   if (p.type === "abastecimento") {
-    const rows = await db.stockMovement.findMany({ where: stockWhere(p, ["ABASTECIMENTO"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } });
+    const rows = await db.stockMovement.findMany({ where: stockWhere(p, ["ABASTECIMENTO"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true, receipt: true } });
     const q = (r: (typeof rows)[number], s: string) => (r.cylinderType.size === s ? r.quantity : "");
     const tot = (s: string) => sum(rows.filter(r => r.cylinderType.size === s).map(r => r.quantity));
     return { ...base, title: "CONTROLE DE ABASTECIMENTO DE OXIGÊNIO", filename: `controle-abastecimento-${stamp}`,
       blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Quem recebeu", width: "*" }, { header: "P", width: 26, align: "center" }, { header: "M", width: 26, align: "center" }, { header: "G", width: 26, align: "center" }, { header: "Total", width: 34, align: "right" }, { header: "Observações", width: "*" }],
         rows: rows.map(r => [fmtDate(r.occurredAt), r.responsibleName, q(r, "P"), q(r, "M"), q(r, "G"), r.quantity, dash(r.notes)]),
         totals: ["Total", "", tot("P"), tot("M"), tot("G"), sum(rows.map(r => r.quantity)), ""], note: limitNote(rows.length) }],
-      signatures: SIGNATURES };
+      signatures: SIGNATURES, receipts: await receiptItems(rows) };
   }
 
   if (p.type === "domiciliar") {
@@ -103,7 +120,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
 
   if (p.type === "trocas") {
     const [rows, pend] = await Promise.all([
-      db.stockMovement.findMany({ where: stockWhere(p, ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true } }),
+      db.stockMovement.findMany({ where: stockWhere(p, ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true, receipt: true } }),
       pendingBySize()]);
     const pf = p.size ? pend.filter(x => x.size === p.size) : pend;
     return { ...base, title: "TROCAS DE CILINDROS COM O FORNECEDOR", filename: `trocas-fornecedor-${stamp}`,
@@ -112,7 +129,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
           rows: rows.map(r => [fmtDate(r.occurredAt), r.operation === "ENVIO_FORNECEDOR" ? "Envio de vazios" : "Retorno de cheios", r.cylinderType.size, r.quantity, r.responsibleName, dash(r.notes)]), note: limitNote(rows.length) },
         { heading: "PENDÊNCIAS ATUAIS (vazios enviados − cheios recebidos)", columns: [{ header: "Categoria", width: "*" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
           rows: pf.map(x => [x.label, x.sent, x.returned, x.pending]), totals: ["Total pendente", sum(pf.map(x => x.sent)), sum(pf.map(x => x.returned)), sum(pf.map(x => x.pending))] }],
-      signatures: SIGNATURES };
+      signatures: SIGNATURES, receipts: await receiptItems(rows.filter(r => r.operation === "RETORNO_FORNECEDOR")) };
   }
 
   if (p.type === "inventario") {
@@ -124,7 +141,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
     const [f, rows] = await Promise.all([flowmeterSummary(), db.flowmeterMovement.findMany({ where: flowWhere(p, true), orderBy: ORDER, take: LIMIT })]);
     return { ...base, filters: p.responsible ? `Responsável: ${p.responsible}` : undefined, title: "CONTROLE DE FLUXÔMETROS", filename: `controle-fluxometros-${stamp}`,
       blocks: [
-        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias]], totals: ["Total cadastrado", f.total] },
+        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub]], totals: ["Total cadastrado", f.total] },
         { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: "*" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
           rows: rows.map(r => [fmtDate(r.occurredAt), FM_OP_LABEL[r.operation], r.quantity, `${r.fromLocation ? FM_LOC_LABEL[r.fromLocation] : "—"} → ${r.toLocation ? FM_LOC_LABEL[r.toLocation] : "—"}`, r.responsibleName, dash(r.notes)]),
           note: limitNote(rows.length) }],

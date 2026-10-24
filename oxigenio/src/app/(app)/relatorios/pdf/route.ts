@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth";
 import { audit } from "@/lib/audit";
 import { paramsSchema } from "@/lib/reports/params";
 import { buildReport, ReportError } from "@/lib/reports/data";
-import { renderPdf } from "@/lib/reports/pdf";
+import { renderPdfStream } from "@/lib/reports/pdf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,10 +18,10 @@ export async function GET(req: NextRequest) {
   if (!parsed.success) return msg(parsed.error.issues[0].message, 400);
   try {
     const report = await buildReport(parsed.data, { role: user.role, name: user.name });
-    const pdf = await renderPdf(report, { name: user.name });
+    const stream = renderPdfStream(report, { name: user.name });
     await audit({ userId: user.id, action: "RELATORIO_EMITIDO", entity: "Relatorio", after: { type: parsed.data.type, from: parsed.data.from, to: parsed.data.to } });
     const disp = req.nextUrl.searchParams.get("download") === "1" ? "attachment" : "inline";
-    return new NextResponse(new Uint8Array(pdf), { headers: {
+    return new NextResponse(stream, { headers: {
       "Content-Type": "application/pdf", "Content-Disposition": `${disp}; filename="${report.filename}.pdf"`, "Cache-Control": "no-store" } });
   } catch (e) {
     if (e instanceof ReportError) return msg(e.message, e.status);

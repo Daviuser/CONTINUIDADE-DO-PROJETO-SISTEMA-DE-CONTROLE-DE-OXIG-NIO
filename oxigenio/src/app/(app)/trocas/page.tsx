@@ -24,7 +24,7 @@ export default async function Trocas({ searchParams }: { searchParams: Promise<R
       </section>
       {w && (<>
         <MoveForm title="1. Enviar cilindros vazios ao fornecedor" action={registerSupplierSend} back="/trocas" userName={user.name} submit="Registrar envio" />
-        <MoveForm title="2. Receber cilindros cheios do fornecedor" action={registerSupplierReturn} back="/trocas" userName={user.name} submit="Registrar retorno" />
+        <MoveForm title="2. Receber cilindros cheios do fornecedor" action={registerSupplierReturn} back="/trocas" userName={user.name} submit="Registrar retorno" receipt />
       </>)}
       <History title="Histórico de trocas" ops={["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"]} sp={sp} base="/trocas" canReverse={w} />
     </>

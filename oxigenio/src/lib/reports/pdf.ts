@@ -2,8 +2,9 @@
 import "server-only";
 import fs from "fs";
 import path from "path";
+import { Readable } from "stream";
 import { fmtDateTime } from "@/lib/format";
-import type { Report, Block } from "./data";
+import type { Report, Block, ReceiptItem } from "./data";
 
 const GREEN = "#1e7a2e", INK = "#1c2733", MUTED = "#6b7a73";
 let logoCache: string | null | undefined;
@@ -42,6 +43,16 @@ function table(b: Block) {
   return out;
 }
 
+function receipts(items: ReceiptItem[], usable: number, landscape: boolean) {
+  if (!items.length) return [];
+  return [
+    { text: "COMPROVANTES (RECIBOS) DO FORNECEDOR", bold: true, fontSize: 9.5, color: GREEN, margin: [0, 16, 0, 2], keepWithNext: true },
+    ...items.map(it => ({ unbreakable: true, margin: [0, 8, 0, 0], stack: [
+      { text: it.caption, fontSize: 8.5, bold: true },
+      it.image ? { image: it.image, fit: [Math.min(usable, 380), landscape ? 280 : 360], margin: [0, 4, 0, 0] } : { text: it.note ?? "", fontSize: 8, color: MUTED, margin: [0, 4, 0, 0] }] })),
+  ];
+}
+
 function signatures(labels: string[], usable: number) {
   const gap = 30, n = labels.length;
   const colW = n === 1 ? 280 : (usable - gap * (n - 1)) / n, lw = colW - 6;
@@ -53,7 +64,7 @@ function signatures(labels: string[], usable: number) {
     { text: "Data: ______ / ______ / __________", fontSize: 9, margin: [0, 16, 0, 0] } ] })) };
 }
 
-export function renderPdf(r: Report, by: { name: string }): Promise<Buffer> {
+function buildDef(r: Report, by: { name: string }): any {
   const usable = r.landscape ? 770 : 523;
   const lg = logo();
   const def: any = {
@@ -73,9 +84,15 @@ export function renderPdf(r: Report, by: { name: string }): Promise<Buffer> {
         { width: "*", stack: [{ text: r.title, fontSize: 15, bold: true }, { text: r.period, fontSize: 9, color: "#4b5a53", margin: [0, 3, 0, 0] }, ...(r.filters ? [{ text: r.filters, fontSize: 8, color: MUTED, margin: [0, 2, 0, 0] }] : [])] },
         { width: "auto", alignment: "right", stack: [{ text: `Emitido em: ${fmtDateTime(new Date())}`, fontSize: 8 }, { text: `Emitido por: ${by.name}`, fontSize: 8 }] }], margin: [0, 0, 0, 6] },
       ...r.blocks.flatMap(table),
+      ...receipts(r.receipts ?? [], usable, !!r.landscape),
       signatures(r.signatures, usable),
     ],
   };
+  return def;
+}
+
+export function renderPdf(r: Report, by: { name: string }): Promise<Buffer> {
+  const def = buildDef(r, by);
   return new Promise<Buffer>((resolve, reject) => {
     try {
       const doc = printer().createPdfKitDocument(def);
@@ -86,4 +103,11 @@ export function renderPdf(r: Report, by: { name: string }): Promise<Buffer> {
       doc.end();
     } catch (e) { reject(e); }
   });
+}
+
+// Resposta em fluxo: relatórios com várias fotos podem passar de 4,5 MB (limite das funções da Vercel para respostas não transmitidas).
+export function renderPdfStream(r: Report, by: { name: string }): ReadableStream {
+  const doc = printer().createPdfKitDocument(buildDef(r, by));
+  doc.end();
+  return Readable.toWeb(doc as unknown as Readable) as unknown as ReadableStream;
 }

@@ -4,10 +4,11 @@ import { SIZES, SIZE_LABEL } from "@/lib/labels";
 import { todayStr } from "@/lib/format";
 import { SubmitButton } from "@/components/ui/SubmitButton";
 import { Icon } from "@/components/Icon";
+import { ReceiptField } from "@/components/ui/ReceiptField";
 
-export function MoveForm({ title, action, back, userName, submit, noSize, notesLabel = "Observações", notesRequired, children }: {
+export function MoveForm({ title, action, back, userName, submit, noSize, notesLabel = "Observações", notesRequired, receipt, children }: {
   title: string; action: (fd: FormData) => Promise<void>; back: string; userName: string; submit: string;
-  noSize?: boolean; notesLabel?: string; notesRequired?: boolean; children?: React.ReactNode }) {
+  noSize?: boolean; notesLabel?: string; notesRequired?: boolean; receipt?: boolean; children?: React.ReactNode }) {
   return (
     <form action={action} className="card grid items-end gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
       <h2 className="border-b pb-3 sm:col-span-2 lg:col-span-4">{title}</h2>
@@ -18,6 +19,7 @@ export function MoveForm({ title, action, back, userName, submit, noSize, notesL
       <label className="text-sm">Quantidade *<input name="quantity" type="number" min={1} step={1} required inputMode="numeric" className={inputCls} /></label>
       <label className="text-sm">Responsável *<input name="responsibleName" required defaultValue={userName} className={inputCls} /></label>
       {children}
+      {receipt && <div className="sm:col-span-2 lg:col-span-4"><ReceiptField /></div>}
       <label className="text-sm sm:col-span-2 lg:col-span-3">{notesLabel}{notesRequired && " *"}<input name="notes" required={notesRequired} className={inputCls} /></label>
       <SubmitButton icon="check" className="btn btn-primary w-full">{submit}</SubmitButton>
     </form>

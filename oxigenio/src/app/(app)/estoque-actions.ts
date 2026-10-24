@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { requireWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
 import { applyMovement, reverseMovement, StockError, type MoveInput } from "@/lib/stock";
+import { saveReceipt, removeReceipt, type ReceiptMeta } from "@/lib/receipts";
 
 const base = z.object({
   back: z.enum(["/cilindros", "/abastecimentos", "/trocas", "/domicilio"]),
@@ -17,7 +18,8 @@ const base = z.object({
 });
 
 async function go<T extends z.ZodRawShape>(fd: FormData, extra: z.ZodObject<T>,
-  build: (d: z.infer<typeof base> & z.infer<z.ZodObject<T>>, userId: string) => Promise<Omit<MoveInput, "size" | "quantity" | "occurredAt" | "responsibleName" | "notes" | "requestKey" | "userId">>) {
+  build: (d: z.infer<typeof base> & z.infer<z.ZodObject<T>>, userId: string) => Promise<Omit<MoveInput, "size" | "quantity" | "occurredAt" | "responsibleName" | "notes" | "requestKey" | "userId" | "receipt">>,
+  opts?: { receipt?: boolean }) {
   const user = await requireWriter();
   const raw = formObj(fd);
   const backRaw = String(raw.back ?? "/cilindros");
@@ -26,12 +28,27 @@ async function go<T extends z.ZodRawShape>(fd: FormData, extra: z.ZodObject<T>,
   if (!p.success) return fail(p.error.issues[0].message);
   const d = p.data as z.infer<typeof base> & z.infer<z.ZodObject<T>>;
   if (d.occurredAt > todayStr()) return fail("A data não pode ser futura.");
+  // Foto do recibo (opcional): validada e enviada ANTES de registrar. Se o envio falhar, nada é registrado.
+  let receipt: ReceiptMeta | undefined;
+  const file = opts?.receipt ? fd.get("receipt") : null;
+  if (file instanceof File && file.size > 0) {
+    try { receipt = await saveReceipt(file); }
+    catch (e) {
+      if (e instanceof StockError) return fail(e.message);
+      console.error("Falha no envio do recibo:", e instanceof Error ? e.message : "erro");
+      return fail("Não foi possível enviar a foto do recibo. Nada foi registrado; tente novamente ou registre sem a foto.");
+    }
+  }
   let msg: string | null = null; let dup = false;
   try {
     const spec = await build(d, user.id);
     dup = (await applyMovement({ ...spec, size: d.size, quantity: d.quantity, occurredAt: parseDate(d.occurredAt),
-      responsibleName: d.responsibleName, notes: d.notes, requestKey: d.requestKey, userId: user.id })).duplicate;
-  } catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
+      responsibleName: d.responsibleName, notes: d.notes, requestKey: d.requestKey, userId: user.id, receipt })).duplicate;
+  } catch (e) {
+    if (e instanceof StockError) msg = e.message;
+    else { if (receipt) await removeReceipt(receipt.pathname); throw e; }
+  }
+  if (receipt && (dup || msg)) await removeReceipt(receipt.pathname); // não deixa arquivo órfão
   redirect(msg ? `${d.back}?erro=${encodeURIComponent(msg)}` : `${d.back}?ok=${dup ? "dup" : "1"}`);
 }
 const none = z.object({});
@@ -51,7 +68,7 @@ export async function registerInitialStock(fd: FormData) {
 }
 
 export async function registerSupply(fd: FormData) {
-  return go(fd, none, async () => ({ operation: "ABASTECIMENTO", to: { loc: "HOSPITAL", cond: "CHEIO" } }));
+  return go(fd, none, async () => ({ operation: "ABASTECIMENTO", to: { loc: "HOSPITAL", cond: "CHEIO" } }), { receipt: true });
 }
 
 export async function registerUnavailable(fd: FormData) {
@@ -79,7 +96,7 @@ export async function registerSupplierSend(fd: FormData) {
 }
 
 export async function registerSupplierReturn(fd: FormData) {
-  return go(fd, none, async () => ({ operation: "RETORNO_FORNECEDOR", from: { loc: "TRANSPORTE", cond: "VAZIO" }, to: { loc: "HOSPITAL", cond: "CHEIO" } }));
+  return go(fd, none, async () => ({ operation: "RETORNO_FORNECEDOR", from: { loc: "TRANSPORTE", cond: "VAZIO" }, to: { loc: "HOSPITAL", cond: "CHEIO" } }), { receipt: true });
 }
 
 export async function reverseCylinderMovement(fd: FormData) {

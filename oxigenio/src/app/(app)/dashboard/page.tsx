@@ -35,6 +35,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Stat label="Vazios" value={c.hVazio} icon="cylinder" tone="neutral" />
           <Stat label="Em domicílio" value={c.dom} icon="home" />
           <Stat label="Nas enfermarias" value={c.enf} icon="building" />
+          <Stat label="Nas máquinas de intubação" value={c.maq} icon="activity" />
           <Stat label="Com o fornecedor" value={c.forn} icon="truck" tone="warn" hint="Trocas pendentes" />
           <Stat label="Indisponíveis" value={c.hIndisp} icon="alert" tone="neutral" />
         </div>
@@ -46,6 +47,7 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           <Stat label="Disponíveis no hospital" value={f.hospital} icon="gauge" />
           <Stat label="Em domicílio" value={f.domicilio} icon="home" />
           <Stat label="Nas enfermarias" value={f.enfermarias} icon="building" />
+          <Stat label="Nas máquinas de intubação" value={f.maquinas + f.maquinasIntub} icon="activity" />
           <Stat label="Pacientes ativos" value={pacientes} icon="users" />
         </div>
       </section>

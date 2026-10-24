@@ -21,7 +21,7 @@ export async function History({ title, ops, sp, base, canReverse, patients, supp
   };
   const [rows, total] = await Promise.all([
     db.stockMovement.findMany({ where, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], skip: (page - 1) * PAGE, take: PAGE,
-      include: { cylinderType: true, fromLocation: true, toLocation: true, patient: { select: { fullName: true } } } }),
+      include: { cylinderType: true, fromLocation: true, toLocation: true, patient: { select: { fullName: true } }, receipt: { select: { id: true } } } }),
     db.stockMovement.count({ where }),
   ]);
   const pages = Math.max(1, Math.ceil(total / PAGE));
@@ -43,7 +43,7 @@ export async function History({ title, ops, sp, base, canReverse, patients, supp
         <tbody>{rows.map(m => (
           <tr key={m.id} className={"border-t align-top " + (m.status === "ESTORNADA" ? "text-neutral-400 line-through" : "")}>
             <td className="whitespace-nowrap">{fmtDate(m.occurredAt)}</td>
-            <td>{OP_LABEL[m.operation]}{m.reversalOfId && " (ESTORNO)"}</td>
+            <td>{OP_LABEL[m.operation]}{m.reversalOfId && " (ESTORNO)"}{m.receipt && <a href={`/recibos/${m.receipt.id}`} target="_blank" rel="noopener" className="mt-1 flex items-center gap-1 text-xs font-medium text-verde-700 hover:underline">Ver recibo</a>}</td>
             <td>{m.cylinderType.size}</td><td>{m.quantity}</td>
             <td>{pt(m.fromLocation, m.fromCondition)} → {pt(m.toLocation, m.toCondition)}</td>
             <td>{m.patient?.fullName ?? m.supplier ?? "—"}</td>
@@ -51,7 +51,7 @@ export async function History({ title, ops, sp, base, canReverse, patients, supp
             <td className="no-underline">
               {m.reversalOfId ? <span className="text-xs">Motivo: {m.reversalReason}</span>
                 : m.status === "ESTORNADA" ? <span className="badge badge-warn">Estornada</span>
-                : canReverse && m.operation !== "AJUSTE_ESTOQUE" ? (
+                : canReverse && m.operation !== "AJUSTE_ESTOQUE" && m.operation !== "MAQUINA_INTUBACAO" ? (
                   <details><summary className="cursor-pointer text-laranja-600">Estornar</summary>
                     <form action={reverseCylinderMovement} className="mt-1 space-y-1">
                       <input type="hidden" name="id" value={m.id} /><input type="hidden" name="back" value={base} />

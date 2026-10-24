@@ -4,11 +4,11 @@ import { SubmitButton } from "@/components/ui/SubmitButton";
 
 const num = (s: string) => (/^\d+$/.test(s.trim()) ? Number(s) : NaN);
 
-export function FlowmeterEditor({ current, action, requestKey }: { current: { total: number; domicilio: number; enfermarias: number }; action: (fd: FormData) => Promise<void>; requestKey: string }) {
+export function FlowmeterEditor({ current, action, requestKey }: { current: { total: number; domicilio: number; enfermarias: number; maquinas: number }; action: (fd: FormData) => Promise<void>; requestKey: string }) {
   const [total, setTotal] = useState(String(current.total));
   const [dom, setDom] = useState(String(current.domicilio));
   const [enf, setEnf] = useState(String(current.enfermarias));
-  const d = num(total) - num(dom) - num(enf);
+  const d = num(total) - num(dom) - num(enf) - current.maquinas;
   const bad = Number.isNaN(d) || d < 0;
   const F = ({ name, label, value, set, wide }: { name: string; label: string; value: string; set: (v: string) => void; wide?: boolean }) => (
     <label className={"text-sm " + (wide ? "sm:col-span-3" : "")}>{label}
@@ -27,6 +27,7 @@ export function FlowmeterEditor({ current, action, requestKey }: { current: { to
           {!Number.isNaN(d) && d < 0 && <p className="text-xs">A soma passa do total em {-d}.</p>}
         </div>
       </div>
+      {current.maquinas > 0 && <p className="text-xs text-slate-500">Nas máquinas de intubação: <b>{current.maquinas}</b> (ajustado em “Máquinas de intubação”).</p>}
       <SubmitButton icon="check" disabled={bad}>Salvar estoque</SubmitButton>
     </form>
   );

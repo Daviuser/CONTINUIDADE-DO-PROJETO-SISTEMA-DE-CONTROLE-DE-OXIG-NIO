@@ -11,7 +11,7 @@ export default async function Abastecimentos({ searchParams }: { searchParams: P
     <>
       <div><h1>Controle de Abastecimento de Oxigênio</h1><p className="mt-1 text-sm text-slate-500">Registre o recebimento de cilindros <b>cheios</b>. Eles entram no estoque de cilindros cheios do hospital.</p></div>
       <Flash erro={sp.erro} ok={sp.ok} />
-      {w && <MoveForm title="Registrar recebimento" action={registerSupply} back="/abastecimentos" userName={user.name} submit="Registrar abastecimento" />}
+      {w && <MoveForm title="Registrar recebimento" action={registerSupply} back="/abastecimentos" userName={user.name} submit="Registrar abastecimento" receipt />}
       <History title="Histórico de abastecimentos" ops={["ABASTECIMENTO"]} sp={sp} base="/abastecimentos" canReverse={w} />
     </>
   );

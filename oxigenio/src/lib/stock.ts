@@ -1,9 +1,10 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
-import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, FlowmeterOperation } from "@prisma/client";
+import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, FlowmeterOperation, MachineItemKind, MachineOperation } from "@prisma/client";
+import type { ReceiptMeta } from "./receipts";
 import { db } from "./db";
 import { audit } from "./audit";
-import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "./labels";
+import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL } from "./labels";
 import { parseDate, todayStr } from "./format";
 
 export class StockError extends Error {}
@@ -28,7 +29,7 @@ async function inc(tx: Tx, locationId: string, cylinderTypeId: string, condition
 }
 
 export type MoveInput = { operation: StockOperation; size: CylinderSize; quantity: number; from?: Pt; to?: Pt; occurredAt: Date;
-  supplier?: string; patientId?: string; responsibleName: string; notes?: string; requestKey?: string; userId: string };
+  supplier?: string; patientId?: string; responsibleName: string; notes?: string; requestKey?: string; userId: string; receipt?: ReceiptMeta };
 
 export async function applyMovement(i: MoveInput): Promise<{ duplicate: boolean }> {
   if (!Number.isInteger(i.quantity) || i.quantity < 1) throw new StockError("Quantidade deve ser maior que zero.");
@@ -40,12 +41,14 @@ export async function applyMovement(i: MoveInput): Promise<{ duplicate: boolean 
       const t = types.find(x => x.size === i.size); if (!t) throw new StockError("Tipo de cilindro não cadastrado (rode o seed).");
       if (i.from) await dec(tx, L(i.from.loc), t.id, i.from.cond, i.quantity, ptLabel(i.from.loc, i.from.cond) + ` — ${i.size}`);
       if (i.to) await inc(tx, L(i.to.loc), t.id, i.to.cond, i.quantity);
-      return tx.stockMovement.create({ data: {
+      const created = await tx.stockMovement.create({ data: {
         operation: i.operation, cylinderTypeId: t.id, quantity: i.quantity,
         fromLocationId: i.from ? L(i.from.loc) : null, fromCondition: i.from?.cond ?? null,
         toLocationId: i.to ? L(i.to.loc) : null, toCondition: i.to?.cond ?? null,
         occurredAt: i.occurredAt, supplier: i.supplier ?? null, patientId: i.patientId ?? null,
         responsibleName: i.responsibleName, notes: i.notes ?? null, requestKey: i.requestKey ?? null, createdById: i.userId } });
+      if (i.receipt) await tx.receiptPhoto.create({ data: { movementId: created.id, url: i.receipt.url, pathname: i.receipt.pathname, contentType: i.receipt.contentType, size: i.receipt.size, uploadedById: i.userId } });
+      return created;
     });
     await audit({ userId: i.userId, action: "MOVIMENTO_" + i.operation, entity: "StockMovement", entityId: m.id,
       after: { operation: i.operation, size: i.size, quantity: i.quantity, supplier: i.supplier, patientId: i.patientId } });
@@ -73,17 +76,21 @@ export async function reverseMovement(p: { id: string; reason: string; userId: s
 }
 
 export async function cylinderSummary() {
-  const [types, bal] = await Promise.all([db.cylinderType.findMany({ orderBy: { size: "asc" } }), db.stockBalance.findMany({ include: { location: { select: { code: true } } } })]);
+  const [types, bal, mi] = await Promise.all([
+    db.cylinderType.findMany({ orderBy: { size: "asc" } }),
+    db.stockBalance.findMany({ include: { location: { select: { code: true } } } }),
+    db.machineItem.groupBy({ by: ["kind"], _sum: { quantity: true } }),
+  ]);
   const rows = types.map(t => {
     const q = (loc: string, cond?: string) => bal.filter(b => b.cylinderTypeId === t.id && b.location.code === loc && (!cond || b.condition === cond)).reduce((a, b) => a + b.quantity, 0);
-    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), enf: q("ENFERMARIAS"), forn: q("TRANSPORTE"), total: 0 };
-    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.enf + r.forn;
+    const maq = mi.find(x => x.kind === `CILINDRO_${t.size}`)?._sum.quantity ?? 0; // cilindros dentro das máquinas de intubação
+    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), enf: q("ENFERMARIAS"), maq, forn: q("TRANSPORTE"), total: 0 };
+    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.enf + r.maq + r.forn;
     return r;
   });
-  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "enf" | "forn" | "total";
+  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "enf" | "maq" | "forn" | "total";
   const s = (k: K) => rows.reduce((a, r) => a + r[k], 0);
-  // hCheio = disponíveis (cheios no hospital). "hospital" inclui as enfermarias (estão dentro do hospital).
-  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), enf: s("enf"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") + s("enf") };
+  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), enf: s("enf"), maq: s("maq"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") + s("enf") };
   return { rows, totals };
 }
 
@@ -148,10 +155,15 @@ export async function reverseFlowmeter(p: { id: string; reason: string; userId: 
 }
 
 export async function flowmeterSummary() {
-  const b = await db.flowmeterBalance.findMany();
+  const [b, mi] = await Promise.all([
+    db.flowmeterBalance.findMany(),
+    db.machineItem.groupBy({ by: ["kind"], where: { kind: { in: ["FLUXOMETRO", "FLUXOMETRO_INTUBACAO"] } }, _sum: { quantity: true } }),
+  ]);
   const q = (l: string) => b.find(x => x.location === l)?.quantity ?? 0;
   const hospital = q("HOSPITAL"), domicilio = q("DOMICILIO"), enfermarias = q("ENFERMARIAS");
-  return { hospital, domicilio, enfermarias, total: hospital + domicilio + enfermarias };
+  const maquinas = mi.find(x => x.kind === "FLUXOMETRO")?._sum.quantity ?? 0;
+  const maquinasIntub = mi.find(x => x.kind === "FLUXOMETRO_INTUBACAO")?._sum.quantity ?? 0;
+  return { hospital, domicilio, enfermarias, maquinas, maquinasIntub, total: hospital + domicilio + enfermarias + maquinas + maquinasIntub };
 }
 
 // ---------- AJUSTE SIMPLES: "informe o total e onde estão" ----------
@@ -175,8 +187,9 @@ export async function setCylinderStock(targets: CylinderTarget[], by: { userId: 
         const bal = await tx.stockBalance.findMany({ where: { cylinderTypeId: type.id } });
         const cur = (loc: string, cond: StockCondition) => bal.find(b => b.locationId === loc && b.condition === cond)?.quantity ?? 0;
         const forn = bal.filter(b => b.locationId === T).reduce((a, b) => a + b.quantity, 0); // trocas com fornecedor: não alterado aqui
-        const disp = t.total - t.vazios - t.dom - t.enf - t.indisp - forn;
-        if (disp < 0) throw new StockError(`${SIZE_LABEL[t.size]}: vazios + domicílio + enfermarias + indisponíveis${forn ? " + com o fornecedor (" + forn + ")" : ""} passam do total (${t.total}).`);
+        const maq = (await tx.machineItem.aggregate({ where: { kind: `CILINDRO_${t.size}` as MachineItemKind }, _sum: { quantity: true } }))._sum.quantity ?? 0; // nas máquinas de intubação
+        const disp = t.total - t.vazios - t.dom - t.enf - t.indisp - forn - maq;
+        if (disp < 0) throw new StockError(`${SIZE_LABEL[t.size]}: vazios + domicílio + enfermarias + indisponíveis${forn ? " + com o fornecedor (" + forn + ")" : ""}${maq ? " + nas máquinas de intubação (" + maq + ")" : ""} passam do total (${t.total}).`);
         const cells: [string, StockCondition, number][] = [[H, "CHEIO", disp], [H, "VAZIO", t.vazios], [H, "INDISPONIVEL", t.indisp], [D, "CHEIO", t.dom], [E, "CHEIO", t.enf]];
         for (const [loc, cond, target] of cells) {
           const delta = target - cur(loc, cond);
@@ -203,8 +216,9 @@ export async function setCylinderStock(targets: CylinderTarget[], by: { userId: 
 
 export async function setFlowmeterStock(t: { total: number; dom: number; enf: number }, by: { userId: string; userName: string }, requestKey?: string): Promise<{ changed: number; duplicate: boolean }> {
   if (![t.total, t.dom, t.enf].every(okInt)) throw new StockError("Use apenas números inteiros, zero ou maiores.");
-  const disp = t.total - t.dom - t.enf;
-  if (disp < 0) throw new StockError("Em domicílio + nas enfermarias passam do total de fluxômetros.");
+  const maq = (await db.machineItem.aggregate({ where: { kind: { in: ["FLUXOMETRO", "FLUXOMETRO_INTUBACAO"] } }, _sum: { quantity: true } }))._sum.quantity ?? 0; // nas máquinas de intubação
+  const disp = t.total - t.dom - t.enf - maq;
+  if (disp < 0) throw new StockError("Em domicílio + nas enfermarias" + (maq ? " + nas máquinas de intubação (" + maq + ")" : "") + " passam do total de fluxômetros.");
   if (requestKey && (await db.flowmeterMovement.findFirst({ where: { requestKey: { startsWith: requestKey + "|" } }, select: { id: true } }))) return { changed: 0, duplicate: true };
   try {
     const changed = await db.$transaction(async tx => {
@@ -226,6 +240,89 @@ export async function setFlowmeterStock(t: { total: number; dom: number; enf: nu
   } catch (e) {
     if (isDup(e)) return { changed: 0, duplicate: true };
     if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente salvar novamente.");
+    throw e;
+  }
+}
+
+// ---------- MÁQUINAS DE INTUBAÇÃO ----------
+// Itens da máquina vêm do estoque central (ou entram como novos) e voltam por devolução: a mesma unidade nunca é contada em dois lugares.
+export type MachineMoveInput = { machineId: string; operation: MachineOperation; kind: MachineItemKind; quantity: number; source?: "CENTRAL" | "NOVO";
+  toMachineId?: string; returnCondition?: "CHEIO" | "VAZIO"; occurredAt: Date; responsibleName: string; notes?: string; requestKey?: string; userId: string };
+const cylSize = (k: MachineItemKind): CylinderSize | null => (k === "CILINDRO_P" ? "P" : k === "CILINDRO_M" ? "M" : k === "CILINDRO_G" ? "G" : null);
+
+export async function applyMachineMovement(i: MachineMoveInput): Promise<{ duplicate: boolean }> {
+  if (!Number.isInteger(i.quantity) || i.quantity < 0 || i.quantity > 1_000_000) throw new StockError("Informe uma quantidade válida.");
+  if (i.operation !== "AJUSTE" && i.quantity < 1) throw new StockError("Quantidade deve ser maior que zero.");
+  if ((i.operation === "RETIRADA" || i.operation === "AJUSTE") && !(i.notes && i.notes.trim().length >= 3))
+    throw new StockError(i.operation === "RETIRADA" ? "Informe o motivo da retirada." : "Informe a justificativa do ajuste.");
+  if (i.operation === "TRANSFERENCIA" && (!i.toMachineId || i.toMachineId === i.machineId)) throw new StockError("Escolha a máquina de destino (diferente da origem).");
+  if (i.operation === "DEVOLUCAO" && i.kind === "FLUXOMETRO_INTUBACAO") throw new StockError("Fluxômetro de intubação não existe no estoque do hospital: use transferência ou retirada.");
+  if (i.requestKey && (await db.machineMovement.findUnique({ where: { requestKey: i.requestKey }, select: { id: true } }))) return { duplicate: true };
+  try {
+    await db.$transaction(async tx => {
+      const m = await tx.machine.findUnique({ where: { id: i.machineId } });
+      if (!m) throw new StockError("Máquina não encontrada.");
+      if (!m.active && (i.operation === "ENTRADA" || i.operation === "AJUSTE")) throw new StockError("Máquina inativa: reative-a para registrar entradas ou ajustes.");
+      const label = MACHINE_KIND_LABEL[i.kind];
+      const size = cylSize(i.kind), isFlow = i.kind === "FLUXOMETRO";
+      const base = { occurredAt: i.occurredAt, responsibleName: i.responsibleName, createdById: i.userId };
+      const note = (t: string) => `Máquina: ${m.name} (${t})`;
+
+      const mDec = async (id: string, name: string, q: number) => {
+        const r = await tx.machineItem.updateMany({ where: { machineId: id, kind: i.kind, quantity: { gte: q } }, data: { quantity: { decrement: q } } });
+        if (r.count !== 1) {
+          const cur = await tx.machineItem.findUnique({ where: { machineId_kind: { machineId: id, kind: i.kind } } });
+          throw new StockError(`A máquina "${name}" tem apenas ${cur?.quantity ?? 0} (${label}).`);
+        }
+      };
+      const mInc = (id: string, q: number) => tx.machineItem.upsert({ where: { machineId_kind: { machineId: id, kind: i.kind } }, create: { machineId: id, kind: i.kind, quantity: q }, update: { quantity: { increment: q } } });
+      const hosp = async () => {
+        const l = await tx.location.findUnique({ where: { code: "HOSPITAL" } });
+        const t = size ? await tx.cylinderType.findUnique({ where: { size } }) : null;
+        if (!l || (size && !t)) throw new StockError("Localização ou tipo de cilindro não cadastrado (rode o seed).");
+        return { H: l.id, T: t?.id ?? "" };
+      };
+
+      let delta = 0, qty = i.quantity, detail: string | null = null;
+      if (i.operation === "ENTRADA") {
+        const source = i.kind === "FLUXOMETRO_INTUBACAO" ? "NOVO" : (i.source ?? "CENTRAL");
+        if (source === "CENTRAL") {
+          if (size) { const { H, T } = await hosp(); await dec(tx, H, T, "CHEIO", qty, `Hospital (cheio) — ${size}`);
+            await tx.stockMovement.create({ data: { ...base, operation: "MAQUINA_INTUBACAO", cylinderTypeId: T, quantity: qty, fromLocationId: H, fromCondition: "CHEIO", notes: note("entrada") } }); }
+          else if (isFlow) { await fdec(tx, "HOSPITAL", qty);
+            await tx.flowmeterMovement.create({ data: { ...base, operation: "MAQUINA", quantity: qty, fromLocation: "HOSPITAL", notes: note("entrada") } }); }
+        }
+        await mInc(i.machineId, qty); delta = qty;
+        detail = source === "CENTRAL" ? "Saiu do estoque do hospital" : "Entrada nova (cadastro/aquisição)";
+      } else if (i.operation === "RETIRADA") {
+        await mDec(i.machineId, m.name, qty); delta = -qty; detail = "Baixa: saiu do controle";
+      } else if (i.operation === "TRANSFERENCIA") {
+        const dest = await tx.machine.findUnique({ where: { id: i.toMachineId! } });
+        if (!dest || !dest.active) throw new StockError("Máquina de destino não encontrada ou inativa.");
+        await mDec(i.machineId, m.name, qty); await mInc(dest.id, qty); delta = -qty; detail = `Para: ${dest.name}`;
+      } else if (i.operation === "DEVOLUCAO") {
+        const cond = size ? (i.returnCondition ?? "VAZIO") : null;
+        await mDec(i.machineId, m.name, qty);
+        if (size) { const { H, T } = await hosp(); await inc(tx, H, T, cond!, qty);
+          await tx.stockMovement.create({ data: { ...base, operation: "MAQUINA_INTUBACAO", cylinderTypeId: T, quantity: qty, toLocationId: H, toCondition: cond, notes: note("devolução") } }); }
+        else if (isFlow) { await finc(tx, "HOSPITAL", qty);
+          await tx.flowmeterMovement.create({ data: { ...base, operation: "MAQUINA", quantity: qty, toLocation: "HOSPITAL", notes: note("devolução") } }); }
+        delta = -qty; detail = `Voltou ao estoque do hospital${cond ? ` (${COND_LABEL[cond].toLowerCase()})` : ""}`;
+      } else { // AJUSTE: informa a nova quantidade presente na máquina
+        const cur = (await tx.machineItem.findUnique({ where: { machineId_kind: { machineId: i.machineId, kind: i.kind } } }))?.quantity ?? 0;
+        delta = i.quantity - cur;
+        if (delta === 0) throw new StockError(`Nenhuma alteração: a máquina já tem ${cur} (${label}).`);
+        await tx.machineItem.upsert({ where: { machineId_kind: { machineId: i.machineId, kind: i.kind } }, create: { machineId: i.machineId, kind: i.kind, quantity: i.quantity }, update: { quantity: i.quantity } });
+        qty = Math.abs(delta); detail = `Ajustado de ${cur} para ${i.quantity}`;
+      }
+      await tx.machineMovement.create({ data: { ...base, machineId: i.machineId, toMachineId: i.operation === "TRANSFERENCIA" ? i.toMachineId! : null, operation: i.operation,
+        kind: i.kind, quantity: qty, delta, detail, notes: i.notes?.trim() || null, requestKey: i.requestKey ?? null } });
+    }, { isolationLevel: "Serializable" });
+    await audit({ userId: i.userId, action: "MAQUINA_" + i.operation, entity: "Machine", entityId: i.machineId, after: { kind: i.kind, quantity: i.quantity, to: i.toMachineId } });
+    return { duplicate: false };
+  } catch (e) {
+    if (isDup(e)) return { duplicate: true };
+    if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente novamente.");
     throw e;
   }
 }

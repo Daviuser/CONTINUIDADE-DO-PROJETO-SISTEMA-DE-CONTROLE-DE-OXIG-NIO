@@ -21,7 +21,7 @@ export default async function Fluxometros({ searchParams }: { searchParams: Prom
     <>
       <div><h1>Controle de Fluxômetros</h1><p className="mt-1 text-sm text-slate-500">Quantidade total de fluxômetros e onde estão: hospital, domicílio e enfermarias.</p></div>
       <Flash erro={sp.erro} ok={sp.ok} />
-      {w ? <FlowmeterEditor current={{ total: s.total, domicilio: s.domicilio, enfermarias: s.enfermarias }} action={saveFlowmeterStock} requestKey={randomUUID()} /> : (
+      {w ? <FlowmeterEditor current={{ total: s.total, domicilio: s.domicilio, enfermarias: s.enfermarias, maquinas: s.maquinas + s.maquinasIntub }} action={saveFlowmeterStock} requestKey={randomUUID()} /> : (
         <div className="stagger grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Total" value={s.total} icon="gauge" tone="neutral" /><Stat label="Disponíveis no hospital" value={s.hospital} icon="gauge" />
           <Stat label="Em domicílio" value={s.domicilio} icon="home" /><Stat label="Nas enfermarias" value={s.enfermarias} icon="building" /></div>)}
@@ -37,7 +37,7 @@ export default async function Fluxometros({ searchParams }: { searchParams: Prom
                 <td>{m.fromLocation ? FM_LOC_LABEL[m.fromLocation] : "—"} → {m.toLocation ? FM_LOC_LABEL[m.toLocation] : "—"}</td>
                 <td>{m.responsibleName}<div className="text-xs text-neutral-400 no-underline">{fmtDateTime(m.createdAt)}</div></td>
                 <td>{m.reversalReason ? `Estorno: ${m.reversalReason}` : m.notes}</td>
-                <td className="no-underline">{m.reversalOfId ? "Estorno" : m.status === "ESTORNADA" ? <span className="badge badge-warn">Estornada</span> : (w && m.operation !== "AJUSTE") ? (
+                <td className="no-underline">{m.reversalOfId ? "Estorno" : m.status === "ESTORNADA" ? <span className="badge badge-warn">Estornada</span> : (w && m.operation !== "AJUSTE" && m.operation !== "MAQUINA") ? (
                   <details><summary>Estornar</summary>
                     <form action={reverseFlowmeterMovement}><input type="hidden" name="id" value={m.id} />
                       <input name="reason" required minLength={5} placeholder="Justificativa *" className="w-44" /><button className={btn2Cls}>Confirmar estorno</button></form></details>) : <span className="badge badge-ok">Confirmada</span>}</td></tr>))}
