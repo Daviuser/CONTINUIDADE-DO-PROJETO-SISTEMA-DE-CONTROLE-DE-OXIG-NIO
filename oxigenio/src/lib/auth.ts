@@ -36,11 +36,22 @@ export async function login(email: string, password: string) {
 export async function getSession() {
   const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
-  const s = await db.session.findUnique({ where: { tokenHash: sha(token) }, include: { user: true } });
+  const s = await db.session.findUnique({
+    where: { tokenHash: sha(token) },
+    select: {
+      id: true,
+      lastSeenAt: true,
+      expiresAt: true,
+      user: { select: { id: true, name: true, email: true, role: true, active: true } },
+    },
+  });
   if (!s || !s.user.active || s.expiresAt < new Date() ||
       Date.now() - s.lastSeenAt.getTime() > IDLE_MIN * 60000) return null;
   if (Date.now() - s.lastSeenAt.getTime() > 60000)
-    await db.session.update({ where: { id: s.id }, data: { lastSeenAt: new Date() } });
+    await db.session.updateMany({
+      where: { id: s.id, lastSeenAt: { lt: new Date(Date.now() - 60000) } },
+      data: { lastSeenAt: new Date() },
+    });
   return s.user;
 }
 

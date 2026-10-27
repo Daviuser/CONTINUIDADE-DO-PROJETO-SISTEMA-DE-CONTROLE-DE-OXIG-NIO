@@ -5,7 +5,7 @@ import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, F
 import type { ReceiptMeta } from "./receipts";
 import { db } from "./db";
 import { audit } from "./audit";
-import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL, INTERNAL_LOCATIONS, ALL_INTERNAL_LOCATIONS, LEGACY_CODES, LEGACY_MSG, INTERNAL_CODES, FM_KIND_LABEL } from "./labels";
+import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL, ALL_INTERNAL_LOCATIONS, LEGACY_CODES, LEGACY_MSG, INTERNAL_CODES, FM_KIND_LABEL } from "./labels";
 import { parseDate, todayStr } from "./format";
 
 export class StockError extends Error {}
@@ -333,11 +333,23 @@ export async function applyMachineMovement(i: MachineMoveInput): Promise<{ dupli
   }
 }
 
-// ---------- 15 LOCAIS INTERNOS ----------
-// Garante as linhas em "Location" (idempotente: o código é único, nunca duplica).
+// ---------- LOCAIS INTERNOS ----------
+// Provisionados pelas migrations; validação somente leitura para manter a transação de estoque enxuta.
 export async function ensureInternalLocations(client: Prisma.TransactionClient) {
-  for (const l of INTERNAL_LOCATIONS) await client.location.upsert({ where: { code: l.code }, update: {}, create: { code: l.code, name: l.name } });
-  return client.location.findMany({ where: { code: { in: INTERNAL_CODES } }, select: { id: true, code: true } });
+  const locs = await client.location.findMany({
+    where: { code: { in: INTERNAL_CODES } },
+    select: { id: true, code: true, name: true },
+  });
+  const byCode = new Map(locs.map(location => [location.code, location] as const));
+  const invalid = ALL_INTERNAL_LOCATIONS.filter(location => byCode.get(location.code)?.name !== location.name);
+  if (invalid.length > 0) {
+    const details = invalid.map(location => {
+      const found = byCode.get(location.code);
+      return found ? `${location.code} (nome atual: "${found.name}")` : location.code;
+    });
+    throw new StockError(`Locais internos ausentes ou com nome divergente: ${details.join(", ")}. Verifique se todas as migrations de locais foram aplicadas.`);
+  }
+  return locs;
 }
 
 async function lfdec(tx: Tx, locationId: string, kind: FlowmeterKind, qty: number, label: string) {
@@ -364,10 +376,9 @@ export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate
   if (i.operation === "TRANSFERENCIA" && i.fromCode === i.toCode) throw new StockError("Origem e destino devem ser diferentes.");
   if ((i.operation === "SAIDA_CENTRAL" || i.operation === "DEVOLUCAO_CENTRAL") && i.kind === "INTUBACAO") throw new StockError("Fluxômetro de intubação não existe no estoque central: use entrada nova ou transferência entre locais.");
   if (i.operation === "RETIRADA" && !(i.notes && i.notes.trim().length >= 3)) throw new StockError("Informe o motivo da retirada.");
-  if (i.requestKey && (await db.flowmeterLocationMovement.findUnique({ where: { requestKey: i.requestKey }, select: { id: true } }))) return { duplicate: true };
+  const locs = await ensureInternalLocations(db);
   try {
     await db.$transaction(async tx => {
-      const locs = await ensureInternalLocations(tx);
       const idOf = (c?: string) => locs.find(l => l.code === c)?.id ?? null;
       const fromId = needFrom ? idOf(i.fromCode) : null, toId = needTo ? idOf(i.toCode) : null;
       const q = i.quantity;
@@ -383,7 +394,7 @@ export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate
         await tx.flowmeterMovement.create({ data: { ...base, operation: "LOCAL", quantity: q, toLocation: "HOSPITAL", notes: `Local: ${LOC_LABEL[i.fromCode!]} (devolução)` } });
       }
       await tx.flowmeterLocationMovement.create({ data: { ...base, operation: i.operation, kind: i.kind, quantity: q, fromLocationId: fromId, toLocationId: toId, notes: i.notes?.trim() || null, requestKey: i.requestKey ?? null } });
-    }, { isolationLevel: "Serializable" });
+    }, { isolationLevel: "Serializable", timeout: 15_000 });
     await audit({ userId: i.userId, action: "FLUXOMETRO_LOCAL_" + i.operation, entity: "FlowmeterStock", after: { kind: i.kind, quantity: i.quantity, from: i.fromCode, to: i.toCode } });
     return { duplicate: false };
   } catch (e) {
