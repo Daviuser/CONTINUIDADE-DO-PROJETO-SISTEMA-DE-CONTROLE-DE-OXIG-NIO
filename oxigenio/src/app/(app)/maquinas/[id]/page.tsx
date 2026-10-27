@@ -10,7 +10,7 @@ import { Icon } from "@/components/Icon";
 import { Stat } from "@/components/ui/Stat";
 import { inputCls } from "@/lib/ui";
 import { fmtDate, fmtDateTime, todayStr } from "@/lib/format";
-import { MACHINE_KINDS, MACHINE_KIND_LABEL, MACHINE_OP_LABEL, LOC_LABEL } from "@/lib/labels";
+import { MACHINE_KINDS, MACHINE_KIND_LABEL, MACHINE_OP_LABEL, LOC_LABEL, MACHINE_LOCATIONS } from "@/lib/labels";
 import { updateMachine, registerMachineMovement } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,8 @@ export default async function Maquina({ params, searchParams }: { params: Promis
   const user = await requireUser(); const { id } = await params; const sp = await searchParams; const w = user.role !== "CONSULTA";
   const m = await db.machine.findUnique({ where: { id }, include: { location: true, items: true } });
   if (!m) notFound();
-  const [moves, others] = await Promise.all([
+  const [relocs, moves, others] = await Promise.all([
+    db.machineRelocation.findMany({ where: { machineId: id }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 50, include: { fromLocation: true, toLocation: true } }),
     db.machineMovement.findMany({ where: { OR: [{ machineId: id }, { toMachineId: id }] }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100,
       include: { machine: { select: { name: true } }, toMachine: { select: { name: true } } } }),
     w ? db.machine.findMany({ where: { active: true, NOT: { id } }, orderBy: { name: "asc" }, select: { id: true, name: true } }) : Promise.resolve([]),
@@ -47,9 +48,11 @@ export default async function Maquina({ params, searchParams }: { params: Promis
             <input type="hidden" name="id" value={m.id} />
             <label className="text-sm">Nome *<input name="name" required defaultValue={m.name} className={inputCls} /></label>
             <label className="text-sm">Identificação / patrimônio<input name="code" defaultValue={m.code ?? ""} className={inputCls} /></label>
-            <label className="text-sm">Local *<select name="location" defaultValue={m.location.code === "ENFERMARIAS" ? "ENFERMARIAS" : "HOSPITAL"} className={inputCls}><option value="HOSPITAL">{LOC_LABEL.HOSPITAL}</option><option value="ENFERMARIAS">{LOC_LABEL.ENFERMARIAS}</option></select></label>
+            <label className="text-sm">Local *<select name="location" defaultValue={m.location.code} className={inputCls}>{MACHINE_LOCATIONS.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}</select></label>
+            <label className="text-sm">Motivo da mudança de local<input name="moveNotes" maxLength={300} className={inputCls} /></label>
             <label className="flex items-center gap-2 pb-2 text-sm"><input type="checkbox" name="active" defaultChecked={m.active} /> Máquina ativa</label>
             <label className="text-sm sm:col-span-2 lg:col-span-3">Observações<input name="notes" defaultValue={m.notes ?? ""} className={inputCls} /></label>
+            <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-4">Ao mudar o local, os itens da máquina acompanham a máquina (nada é duplicado nem perdido) e a mudança fica registrada no histórico.</p>
             <SubmitButton icon="check" className="btn btn-primary w-full">Salvar</SubmitButton>
           </form>
         </details>)}
@@ -70,6 +73,12 @@ export default async function Maquina({ params, searchParams }: { params: Promis
               </tr>);
           })}
             {!moves.length && <tr><td colSpan={6} className="empty-state">Nenhuma movimentação registrada.</td></tr>}</tbody></table></div>
+      </section>
+      <section className="space-y-3"><h2>Mudanças de local</h2>
+        <div className="card"><table>
+          <thead><tr>{["Data", "De", "Para", "Responsável", "Motivo"].map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>{relocs.map(r => <tr key={r.id}><td className="whitespace-nowrap">{fmtDate(r.occurredAt)}</td><td>{LOC_LABEL[r.fromLocation.code] ?? r.fromLocation.code}</td><td>{LOC_LABEL[r.toLocation.code] ?? r.toLocation.code}</td><td>{r.responsibleName}<div className="text-xs text-slate-400">{fmtDateTime(r.createdAt)}</div></td><td className="text-slate-600">{r.notes ?? "—"}</td></tr>)}
+            {!relocs.length && <tr><td colSpan={5} className="empty-state">Nenhuma mudança de local registrada.</td></tr>}</tbody></table></div>
       </section>
     </>
   );

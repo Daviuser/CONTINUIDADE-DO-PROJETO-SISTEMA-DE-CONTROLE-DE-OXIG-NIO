@@ -3,7 +3,7 @@ import type { Prisma, Role, StockOperation } from "@prisma/client";
 import { db } from "@/lib/db";
 import { fmtDate, parseDate, todayStr, fmtDateTime } from "@/lib/format";
 import { cylinderSummary, flowmeterSummary, pendingBySize } from "@/lib/stock";
-import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL } from "@/lib/labels";
+import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL, INTERNAL_LOCATIONS, INTERNAL_CODES, FM_KIND_LABEL, LOCAL_FLOW_OP_LABEL, MACHINE_KIND_SHORT, ALL_INTERNAL_LOCATIONS, LEGACY_CODES } from "@/lib/labels";
 import { REPORT_TYPES, type ReportParams } from "./params";
 import { receiptDataUrl } from "@/lib/receipts";
 
@@ -32,7 +32,7 @@ function periodLabel(from?: string, to?: string) {
 }
 function filtersLabel(p: ReportParams) {
   return [p.size ? `Categoria: ${SIZE_LABEL[p.size]}` : "", p.responsible ? `Responsável: ${p.responsible}` : "", p.supplier ? `Fornecedor: ${p.supplier}` : "",
-    p.bairro ? `Bairro: ${p.bairro}` : "", p.povoado ? `Povoado: ${p.povoado}` : "", p.patient ? "Paciente selecionado" : ""].filter(Boolean).join(" · ") || undefined;
+    p.bairro ? `Bairro: ${p.bairro}` : "", p.povoado ? `Povoado: ${p.povoado}` : "", p.patient ? "Paciente selecionado" : "", p.local ? `Local: ${LOC_LABEL[p.local] ?? p.local}` : ""].filter(Boolean).join(" · ") || undefined;
 }
 
 function dateFilter(p: ReportParams) {
@@ -46,6 +46,7 @@ function stockWhere(p: ReportParams, ops: StockOperation[], validOnly: boolean):
   if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
   if (p.supplier) w.supplier = { contains: p.supplier, mode: "insensitive" };
   if (p.patient) w.patientId = p.patient;
+  if (p.local) w.OR = [{ fromLocation: { code: p.local } }, { toLocation: { code: p.local } }];
   if (p.bairro || p.povoado) w.patient = {
     ...(p.bairro ? { neighborhood: { contains: p.bairro, mode: "insensitive" as const } } : {}),
     ...(p.povoado ? { village: { contains: p.povoado, mode: "insensitive" as const } } : {}) };
@@ -58,13 +59,20 @@ function flowWhere(p: ReportParams, validOnly: boolean): Prisma.FlowmeterMovemen
   if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
   return w;
 }
+function lfWhere(p: ReportParams): Prisma.FlowmeterLocationMovementWhereInput {
+  const w: Prisma.FlowmeterLocationMovementWhereInput = {};
+  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
+  if (p.local) w.OR = [{ fromLocation: { code: p.local } }, { toLocation: { code: p.local } }];
+  return w;
+}
 const ORDER = [{ occurredAt: "asc" as const }, { createdAt: "asc" as const }];
 
 // Recibos do fornecedor (foto) ligados a cada recebimento. Só JPEG/PNG podem ser embutidos no PDF; limite de 25 fotos por documento.
 const MAX_RECEIPTS = 25;
 async function receiptItems(rows: { occurredAt: Date; responsibleName: string; quantity: number; notes: string | null; cylinderType: { size: string }; receipt: { pathname: string; contentType: string } | null }[]): Promise<ReceiptItem[]> {
   const withPhoto = rows.filter(r => r.receipt);
-  const items = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async (r): Promise<ReceiptItem> => {
+  const items = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async r => {
     const caption = `Recebimento de ${fmtDate(r.occurredAt)} · Cilindros ${r.cylinderType.size}: ${r.quantity} · Recebido por ${r.responsibleName}${r.notes ? " · Obs.: " + r.notes : ""}`;
     const rc = r.receipt!;
     if (rc.contentType !== "image/jpeg" && rc.contentType !== "image/png") return { caption, note: "Foto em formato que o PDF não suporta (WEBP). Consulte o recibo no sistema." };
@@ -79,12 +87,12 @@ async function inventoryBlocks(): Promise<Block[]> {
   const [{ rows, totals: t }, f] = await Promise.all([cylinderSummary(), flowmeterSummary()]);
   return [
     { heading: "QUANTIDADE DE CILINDROS DE OXIGÊNIO",
-      columns: [{ header: "Categoria", width: "*" }, ...["Disponíveis (cheios)", "Vazios", "Em domicílio", "Nas enfermarias", "Nas máquinas", "Com o fornecedor", "Indisponíveis", "Total"].map(h => ({ header: h, align: "right" as const }))],
-      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.dom, r.enf, r.maq, r.forn, r.hIndisp, r.total]),
-      totals: ["Total geral", t.hCheio, t.hVazio, t.dom, t.enf, t.maq, t.forn, t.hIndisp, t.total],
+      columns: [{ header: "Categoria", width: "*" }, ...["Disponíveis (cheios)", "Vazios", "Em domicílio", "Nas enfermarias", "Nas máquinas", "Nos setores", "Com o fornecedor", "Indisponíveis", "Total"].map(h => ({ header: h, align: "right" as const }))],
+      rows: rows.map(r => [r.label, r.hCheio, r.hVazio, r.dom, r.enf, r.maq, r.setores, r.forn, r.hIndisp, r.total]),
+      totals: ["Total geral", t.hCheio, t.hVazio, t.dom, t.enf, t.maq, t.setores, t.forn, t.hIndisp, t.total],
       note: "Em domicílio, nas enfermarias e nas máquinas de intubação: cilindros em uso. Com o fornecedor: vazios enviados para troca e ainda não devolvidos." },
     { heading: "QUANTIDADE DE FLUXÔMETROS", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }],
-      rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub]], totals: ["Total geral", f.total] },
+      rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub], ["Nos locais internos (setores)", f.locais]], totals: ["Total geral", f.total] },
   ];
 }
 
@@ -141,7 +149,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
     const [f, rows] = await Promise.all([flowmeterSummary(), db.flowmeterMovement.findMany({ where: flowWhere(p, true), orderBy: ORDER, take: LIMIT })]);
     return { ...base, filters: p.responsible ? `Responsável: ${p.responsible}` : undefined, title: "CONTROLE DE FLUXÔMETROS", filename: `controle-fluxometros-${stamp}`,
       blocks: [
-        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub]], totals: ["Total cadastrado", f.total] },
+        { heading: "SITUAÇÃO ATUAL", columns: [{ header: "Localização", width: "*" }, { header: "Quantidade", width: 110, align: "right" }], rows: [["Hospital (disponíveis)", f.hospital], ["Domicílio", f.domicilio], ["Enfermarias", f.enfermarias], ["Máquinas de intubação", f.maquinas + f.maquinasIntub], ["Nos locais internos (setores)", f.locais]], totals: ["Total cadastrado", f.total] },
         { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 50 }, { header: "Operação", width: "*" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: "*" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
           rows: rows.map(r => [fmtDate(r.occurredAt), FM_OP_LABEL[r.operation], r.quantity, `${r.fromLocation ? FM_LOC_LABEL[r.fromLocation] : "—"} → ${r.toLocation ? FM_LOC_LABEL[r.toLocation] : "—"}`, r.responsibleName, dash(r.notes)]),
           note: limitNote(rows.length) }],
@@ -149,19 +157,44 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
   }
 
   if (p.type === "movimentacoes") {
-    const [sm, fm] = await Promise.all([
+    const [sm, fm, lf] = await Promise.all([
       db.stockMovement.findMany({ where: stockWhere(p, ALL_OPS, false), orderBy: ORDER, take: LIMIT,
         include: { cylinderType: true, fromLocation: true, toLocation: true, patient: { select: { fullName: true } } } }),
-      p.size || p.supplier || p.patient || p.bairro || p.povoado ? Promise.resolve([]) : db.flowmeterMovement.findMany({ where: flowWhere(p, false), orderBy: ORDER, take: LIMIT })]);
+      p.size || p.supplier || p.patient || p.bairro || p.povoado || p.local ? Promise.resolve([]) : db.flowmeterMovement.findMany({ where: flowWhere(p, false), orderBy: ORDER, take: LIMIT }),
+      p.size || p.supplier || p.patient || p.bairro || p.povoado ? Promise.resolve([]) : db.flowmeterLocationMovement.findMany({ where: lfWhere(p), orderBy: ORDER, take: LIMIT, include: { fromLocation: true, toLocation: true } })]);
     const personal = user.role !== "CONSULTA";
     const status = (s: string, rev: string | null) => (rev ? "Estorno" : s === "ESTORNADA" ? "Estornada" : "Confirmada");
     const all = [
       ...sm.map(m => ({ at: m.occurredAt, c: m.createdAt, cells: [fmtDate(m.occurredAt), "Cilindros", OP_LABEL[m.operation], m.cylinderType.size, m.quantity, `${loc(m.fromLocation, m.fromCondition)} → ${loc(m.toLocation, m.toCondition)}`, personal ? (m.patient?.fullName ?? m.supplier ?? "—") : (m.supplier ?? "—"), m.responsibleName, status(m.status, m.reversalOfId)] as Cell[] })),
       ...fm.map(m => ({ at: m.occurredAt, c: m.createdAt, cells: [fmtDate(m.occurredAt), "Fluxômetros", FM_OP_LABEL[m.operation], "—", m.quantity, `${m.fromLocation ? FM_LOC_LABEL[m.fromLocation] : "—"} → ${m.toLocation ? FM_LOC_LABEL[m.toLocation] : "—"}`, "—", m.responsibleName, status(m.status, m.reversalOfId)] as Cell[] })),
+      ...lf.map(m => ({ at: m.occurredAt, c: m.createdAt, cells: [fmtDate(m.occurredAt), "Fluxômetros (local)", LOCAL_FLOW_OP_LABEL[m.operation], "—", m.quantity,
+        `${m.fromLocation ? LOC_LABEL[m.fromLocation.code] : "Estoque central"} → ${m.toLocation ? LOC_LABEL[m.toLocation.code] : (m.operation === "RETIRADA" ? "Baixa" : "Estoque central")}`, FM_KIND_LABEL[m.kind], m.responsibleName, "Confirmada"] as Cell[] })),
     ].sort((a, b) => a.at.getTime() - b.at.getTime() || a.c.getTime() - b.c.getTime());
     return { ...base, landscape: true, title: "HISTÓRICO DE MOVIMENTAÇÕES DE OXIGÊNIO", filename: `historico-movimentacoes-${stamp}`,
       blocks: [{ columns: [{ header: "Data", width: 50 }, { header: "Registro", width: 56 }, { header: "Operação", width: 130 }, { header: "Tipo", width: 28, align: "center" }, { header: "Qtd.", width: 30, align: "right" }, { header: "De → Para", width: 150 }, { header: "Fornecedor / Paciente", width: 100 }, { header: "Responsável", width: "*" }, { header: "Situação", width: 56 }],
         rows: all.map(a => a.cells), note: "Movimentações estornadas e seus estornos aparecem para rastreabilidade e se anulam no saldo." + (limitNote(Math.max(sm.length, fm.length)) ? " " + limitNote(Math.max(sm.length, fm.length)) : "") }],
+      signatures: SIGNATURES };
+  }
+
+  if (p.type === "localizacao") {
+    const codes = p.local ? [p.local] : INTERNAL_CODES;
+    const where = { location: { code: { in: codes } } };
+    const [bal, fs, machines] = await Promise.all([
+      db.stockBalance.findMany({ where, include: { location: { select: { code: true } }, cylinderType: { select: { size: true } } } }),
+      db.flowmeterStock.findMany({ where, include: { location: { select: { code: true } } } }),
+      db.machine.findMany({ where, orderBy: { name: "asc" }, include: { location: { select: { code: true } }, items: true } }),
+    ]);
+    const has = (c: string) => bal.some(x => x.location.code === c && x.quantity > 0) || fs.some(x => x.location.code === c && x.quantity > 0) || machines.some(mq => mq.location.code === c);
+    const locs = ALL_INTERNAL_LOCATIONS.filter(l => codes.includes(l.code) && (!LEGACY_CODES.includes(l.code) || has(l.code))); // local antigo só aparece com saldo
+    const pmg = (code: string, cond: string) => ["P", "M", "G"].map(sz => sum(bal.filter(x => x.location.code === code && x.condition === cond && x.cylinderType.size === sz).map(x => x.quantity))).join(" / ");
+    const fq = (code: string, k: string) => fs.find(x => x.location.code === code && x.kind === k)?.quantity ?? 0;
+    return { title: "EQUIPAMENTOS POR LOCAL", period: `Posição em ${fmtDateTime(new Date())}`, filters: filtersLabel(p), filename: `equipamentos-por-local-${stamp}`,
+      blocks: [
+        { heading: "CILINDROS E FLUXÔMETROS POR LOCAL", columns: [{ header: "Local", width: "*" }, { header: "Cheios (P / M / G)", align: "center" }, { header: "Vazios (P / M / G)", align: "center" }, { header: "Indisp.", width: 38, align: "right" }, { header: "Fluxôm. comuns", width: 50, align: "right" }, { header: "Fluxôm. intub.", width: 50, align: "right" }, { header: "Máquinas", width: 44, align: "right" }],
+          rows: locs.map(l => [l.name, pmg(l.code, "CHEIO"), pmg(l.code, "VAZIO"), sum(bal.filter(x => x.location.code === l.code && x.condition === "INDISPONIVEL").map(x => x.quantity)), fq(l.code, "COMUM"), fq(l.code, "INTUBACAO"), machines.filter(m => m.location.code === l.code).length]),
+          note: "Itens dentro de máquinas de intubação aparecem na lista abaixo e não são contados nas colunas de cilindros e fluxômetros do local." },
+        { heading: "MÁQUINAS DE INTUBAÇÃO POR LOCAL", columns: [{ header: "Local", width: "*" }, { header: "Máquina", width: "*" }, { header: "Identificação", width: 80 }, { header: "Itens na máquina", width: "*" }],
+          rows: machines.map(m => [LOC_LABEL[m.location.code] ?? m.location.code, m.name, dash(m.code), m.items.filter(i => i.quantity > 0).map(i => `${MACHINE_KIND_SHORT[i.kind]}: ${i.quantity}`).join(" · ") || "—"]) }],
       signatures: SIGNATURES };
   }
 

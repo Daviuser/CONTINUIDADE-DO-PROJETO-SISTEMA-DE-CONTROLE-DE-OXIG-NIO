@@ -4,7 +4,7 @@ import { Icon } from "@/components/Icon";
 import { Flash } from "../_components/MoveForm";
 import { inputCls } from "@/lib/ui";
 import { todayStr } from "@/lib/format";
-import { SIZES, SIZE_LABEL } from "@/lib/labels";
+import { SIZES, SIZE_LABEL, ALL_INTERNAL_LOCATIONS } from "@/lib/labels";
 import { REPORT_TYPES } from "@/lib/reports/params";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +40,7 @@ export default async function Relatorios({ searchParams }: { searchParams: Promi
           <label className="text-sm">Data final<input type="date" name="to" defaultValue={sp.to ?? today} max={today} className={inputCls} /></label>
           <label className="text-sm">Categoria de cilindro<select name="size" defaultValue={sp.size ?? ""} className={inputCls}><option value="">Todas</option>{SIZES.map(s => <option key={s} value={s}>{SIZE_LABEL[s]}</option>)}</select></label>
           <label className="text-sm">Responsável<input name="responsible" defaultValue={sp.responsible} placeholder="Nome (contém)" className={inputCls} /></label>
+          <label className="text-sm">Local<select name="local" defaultValue={sp.local ?? ""} className={inputCls}><option value="">Todos os locais</option>{ALL_INTERNAL_LOCATIONS.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}</select></label>
           {w && <>
             <label className="text-sm">Paciente<select name="patient" defaultValue={sp.patient ?? ""} className={inputCls}><option value="">Todos</option>{patients.map(p => <option key={p.id} value={p.id}>{p.fullName}</option>)}</select></label>
             <label className="text-sm">Bairro<input name="bairro" defaultValue={sp.bairro} className={inputCls} /></label>

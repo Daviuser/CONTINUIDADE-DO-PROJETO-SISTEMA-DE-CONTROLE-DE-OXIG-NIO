@@ -12,24 +12,20 @@ enum Role {
   OPERADOR
   CONSULTA
 }
-
 enum CylinderSize {
   P
   M
   G
 }
-
 enum MovementStatus {
   RASCUNHO
   CONFIRMADA
   ESTORNADA
 }
-
 enum RecordStatus {
   ATIVO
   INATIVO
 }
-
 enum StockCondition {
   CHEIO
   VAZIO
@@ -46,13 +42,15 @@ enum StockOperation {
   RETORNO_DISPONIVEL
   AJUSTE_ESTOQUE
   MAQUINA_INTUBACAO
+  SAIDA_LOCAL
+  DEVOLUCAO_LOCAL
+  TRANSFERENCIA_LOCAL
 }
 enum FlowmeterLocation {
   HOSPITAL
   DOMICILIO
   ENFERMARIAS
 }
-
 enum FlowmeterOperation {
   ENTRADA
   ENVIO_DOMICILIO
@@ -60,8 +58,19 @@ enum FlowmeterOperation {
   BAIXA
   AJUSTE
   MAQUINA
+  LOCAL
 }
-
+enum FlowmeterKind {
+  COMUM
+  INTUBACAO
+}
+enum LocalFlowOperation {
+  SAIDA_CENTRAL
+  DEVOLUCAO_CENTRAL
+  TRANSFERENCIA
+  ENTRADA_NOVA
+  RETIRADA
+}
 enum MachineItemKind {
   CILINDRO_P
   CILINDRO_M
@@ -69,7 +78,6 @@ enum MachineItemKind {
   FLUXOMETRO
   FLUXOMETRO_INTUBACAO
 }
-
 enum MachineOperation {
   ENTRADA
   RETIRADA
@@ -113,6 +121,11 @@ model Location {
   movementsFrom StockMovement[] @relation("MovFrom")
   movementsTo   StockMovement[] @relation("MovTo")
   machines      Machine[]
+  flowStock     FlowmeterStock[]
+  flowFrom      FlowmeterLocationMovement[] @relation("FlowFrom")
+  flowTo        FlowmeterLocationMovement[] @relation("FlowTo")
+  relocFrom     MachineRelocation[] @relation("RelocFrom")
+  relocTo       MachineRelocation[] @relation("RelocTo")
 }
 
 model CylinderType {
@@ -261,6 +274,7 @@ model Machine {
   items      MachineItem[]
   movements  MachineMovement[] @relation("MachineSource")
   received   MachineMovement[] @relation("MachineDest")
+  relocations MachineRelocation[]
 }
 
 model MachineItem {
@@ -290,4 +304,52 @@ model MachineMovement {
   createdAt       DateTime         @default(now())
   @@index([machineId, occurredAt])
   @@index([toMachineId])
+}
+
+// Fluxômetros nos locais internos (o estoque central continua em FlowmeterBalance/HOSPITAL).
+model FlowmeterStock {
+  locationId String
+  kind       FlowmeterKind
+  quantity   Int           @default(0)
+  location   Location      @relation(fields: [locationId], references: [id])
+  @@id([locationId, kind])
+}
+
+model FlowmeterLocationMovement {
+  id              String             @id @default(cuid())
+  operation       LocalFlowOperation
+  kind            FlowmeterKind
+  quantity        Int
+  fromLocationId  String?
+  fromLocation    Location?          @relation("FlowFrom", fields: [fromLocationId], references: [id])
+  toLocationId    String?
+  toLocation      Location?          @relation("FlowTo", fields: [toLocationId], references: [id])
+  occurredAt      DateTime
+  responsibleName String
+  notes           String?
+  requestKey      String?            @unique
+  createdById     String
+  createdAt       DateTime           @default(now())
+  @@index([occurredAt])
+  @@index([fromLocationId])
+  @@index([toLocationId])
+}
+
+// Histórico de mudança de local das máquinas (os itens acompanham a máquina).
+model MachineRelocation {
+  id              String   @id @default(cuid())
+  machineId       String
+  machine         Machine  @relation(fields: [machineId], references: [id])
+  fromLocationId  String
+  fromLocation    Location @relation("RelocFrom", fields: [fromLocationId], references: [id])
+  toLocationId    String
+  toLocation      Location @relation("RelocTo", fields: [toLocationId], references: [id])
+  occurredAt      DateTime
+  responsibleName String
+  notes           String?
+  createdById     String
+  createdAt       DateTime @default(now())
+  @@index([machineId])
+  @@index([fromLocationId])
+  @@index([toLocationId])
 }

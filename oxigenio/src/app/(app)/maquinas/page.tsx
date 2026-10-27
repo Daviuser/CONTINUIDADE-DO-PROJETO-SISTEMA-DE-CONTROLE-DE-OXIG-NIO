@@ -5,24 +5,26 @@ import { Flash } from "../_components/MoveForm";
 import { SubmitButton } from "@/components/ui/SubmitButton";
 import { Icon } from "@/components/Icon";
 import { inputCls } from "@/lib/ui";
-import { MACHINE_KINDS, MACHINE_KIND_SHORT, LOC_LABEL } from "@/lib/labels";
+import { MACHINE_KINDS, MACHINE_KIND_SHORT, LOC_LABEL, MACHINE_LOCATIONS } from "@/lib/labels";
 import { createMachine } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function Maquinas({ searchParams }: { searchParams: Promise<Record<string, string | undefined>> }) {
   const user = await requireUser(); const sp = await searchParams; const w = user.role !== "CONSULTA";
-  const machines = await db.machine.findMany({ orderBy: [{ active: "desc" }, { name: "asc" }], include: { location: true, items: true } });
+  const localOk = !!sp.local && MACHINE_LOCATIONS.some(l => l.code === sp.local);
+  const machines = await db.machine.findMany({ where: localOk ? { location: { code: sp.local } } : {}, orderBy: [{ active: "desc" }, { name: "asc" }], include: { location: true, items: true } });
   return (
     <>
       <div><h1>Máquinas de Intubação</h1><p className="mt-1 text-sm text-slate-500">Cadastro das máquinas e dos cilindros e fluxômetros que cada uma utiliza. Os itens saem do estoque do hospital e voltam por devolução, sem contar duas vezes.</p></div>
       <Flash erro={sp.erro} ok={sp.ok} />
+      <form className="card filters flex flex-wrap items-end gap-2 p-3 text-sm"><label>Filtrar por local<select name="local" defaultValue={localOk ? sp.local : ""} className={inputCls}><option value="">Todos os locais</option>{MACHINE_LOCATIONS.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}</select></label><button className="btn btn-secondary">Filtrar</button></form>
       {w && (
         <form action={createMachine} className="card grid items-end gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
           <h2 className="border-b pb-3 sm:col-span-2 lg:col-span-4">Cadastrar máquina</h2>
           <label className="text-sm">Nome *<input name="name" required maxLength={80} className={inputCls} /></label>
           <label className="text-sm">Identificação / patrimônio<input name="code" maxLength={40} className={inputCls} /></label>
-          <label className="text-sm">Local *<select name="location" className={inputCls}><option value="HOSPITAL">{LOC_LABEL.HOSPITAL}</option><option value="ENFERMARIAS">{LOC_LABEL.ENFERMARIAS}</option></select></label>
+          <label className="text-sm">Local *<select name="location" className={inputCls}>{MACHINE_LOCATIONS.map(l => <option key={l.code} value={l.code}>{l.name}</option>)}</select></label>
           <SubmitButton icon="check" className="btn btn-primary w-full">Cadastrar</SubmitButton>
           <label className="text-sm sm:col-span-2 lg:col-span-4">Observações<input name="notes" maxLength={500} className={inputCls} /></label>
         </form>)}

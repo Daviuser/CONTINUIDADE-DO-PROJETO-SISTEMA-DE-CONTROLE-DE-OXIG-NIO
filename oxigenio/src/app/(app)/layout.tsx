@@ -12,7 +12,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       { href: "/abastecimentos", label: "Abastecimento", icon: "box" },
       { href: "/trocas", label: "Trocas com fornecedores", icon: "truck" },
       { href: "/fluxometros", label: "Fluxômetros", icon: "gauge" },
-      { href: "/maquinas", label: "Máquinas de intubação", icon: "activity" } ] },
+      { href: "/maquinas", label: "Máquinas de intubação", icon: "activity" },
+      { href: "/localizacao", label: "Localização", icon: "building" } ] },
     { title: "Atendimento", items: [
       { href: "/domicilio", label: "Entregas e recolhimentos", icon: "swap" },
       { href: "/pacientes", label: "Pacientes", icon: "users" } ] },

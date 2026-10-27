@@ -2,16 +2,16 @@
 import { useState } from "react";
 import { SubmitButton } from "@/components/ui/SubmitButton";
 
-export type CylRow = { size: string; label: string; total: number; hVazio: number; dom: number; enf: number; hIndisp: number; forn: number; maq: number };
-const FIELDS = [["total", "Total de cilindros"], ["vazios", "Vazios (no hospital)"], ["dom", "Em domicílio"], ["enf", "Nas enfermarias"], ["indisp", "Indisponíveis"]] as const;
+export type CylRow = { size: string; label: string; total: number; vazios: number; dom: number; enf: number; indisp: number; forn: number; maq: number; setores: number };
+const FIELDS = [["total", "Total de cilindros"], ["vazios", "Vazios (no hospital)"], ["dom", "Em domicílio"], ["enf", "Nas enfermarias (sem local definido)"], ["indisp", "Indisponíveis"]] as const;
 type F = (typeof FIELDS)[number][0];
 const num = (s: string) => (/^\d+$/.test(s.trim()) ? Number(s) : NaN);
 
 export function CylinderEditor({ rows, action, requestKey }: { rows: CylRow[]; action: (fd: FormData) => Promise<void>; requestKey: string }) {
   const [v, setV] = useState<Record<string, Record<F, string>>>(() =>
-    Object.fromEntries(rows.map(r => [r.size, { total: String(r.total), vazios: String(r.hVazio), dom: String(r.dom), enf: String(r.enf), indisp: String(r.hIndisp) }])));
+    Object.fromEntries(rows.map(r => [r.size, { total: String(r.total), vazios: String(r.vazios), dom: String(r.dom), enf: String(r.enf), indisp: String(r.indisp) }])));
   const set = (size: string, f: F, val: string) => setV(p => ({ ...p, [size]: { ...p[size], [f]: val } }));
-  const calc = rows.map(r => { const x = v[r.size]; return { r, d: num(x.total) - num(x.vazios) - num(x.dom) - num(x.enf) - num(x.indisp) - r.forn - r.maq }; });
+  const calc = rows.map(r => { const x = v[r.size]; return { r, d: num(x.total) - num(x.vazios) - num(x.dom) - num(x.enf) - num(x.indisp) - r.forn - r.maq - r.setores }; });
   const invalid = calc.some(c => Number.isNaN(c.d) || c.d < 0);
   const sum = (f: F) => rows.reduce((a, r) => a + (num(v[r.size][f]) || 0), 0);
   const disp = calc.reduce((a, c) => a + (c.d > 0 ? c.d : 0), 0);
@@ -33,6 +33,7 @@ export function CylinderEditor({ rows, action, requestKey }: { rows: CylRow[]; a
                     <input name={`${f}_${r.size}`} inputMode="numeric" pattern="[0-9]*" required value={v[r.size][f]} onChange={e => set(r.size, f, e.target.value)} className="mt-1.5 w-full tabular-nums" /></label>))}
               </div>
               {r.forn > 0 && <p className="text-xs text-slate-500">Com o fornecedor (troca): <b>{r.forn}</b>. Isso é ajustado em “Trocas com fornecedores”.</p>}
+              {r.setores > 0 && <p className="text-xs text-slate-500">Distribuídos nos locais internos: <b>{r.setores}</b>. Isso é ajustado em “Localização”.</p>}
               {r.maq > 0 && <p className="text-xs text-slate-500">Nas máquinas de intubação: <b>{r.maq}</b>. Isso é ajustado em “Máquinas de intubação”.</p>}
               <div className={"rounded-xl p-3 text-center " + (bad ? "bg-red-50 text-red-700" : "bg-verde-50 text-verde-800")}>
                 <p className="text-xs font-medium">Disponíveis (cheios no hospital)</p>

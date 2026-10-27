@@ -1,14 +1,15 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
+import type { FlowmeterKind, LocalFlowOperation } from "@prisma/client";
 import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, FlowmeterOperation, MachineItemKind, MachineOperation } from "@prisma/client";
 import type { ReceiptMeta } from "./receipts";
 import { db } from "./db";
 import { audit } from "./audit";
-import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL } from "./labels";
+import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL, INTERNAL_LOCATIONS, ALL_INTERNAL_LOCATIONS, LEGACY_CODES, LEGACY_MSG, INTERNAL_CODES, FM_KIND_LABEL } from "./labels";
 import { parseDate, todayStr } from "./format";
 
 export class StockError extends Error {}
-export type LocCode = "HOSPITAL" | "DOMICILIO" | "TRANSPORTE";
+export type LocCode = string; // HOSPITAL, DOMICILIO, TRANSPORTE, ENFERMARIAS ou um dos locais internos
 export type Pt = { loc: LocCode; cond: StockCondition };
 type Tx = Prisma.TransactionClient;
 const isDup = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
@@ -83,14 +84,15 @@ export async function cylinderSummary() {
   ]);
   const rows = types.map(t => {
     const q = (loc: string, cond?: string) => bal.filter(b => b.cylinderTypeId === t.id && b.location.code === loc && (!cond || b.condition === cond)).reduce((a, b) => a + b.quantity, 0);
-    const maq = mi.find(x => x.kind === `CILINDRO_${t.size}`)?._sum.quantity ?? 0; // cilindros dentro das máquinas de intubação
-    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), enf: q("ENFERMARIAS"), maq, forn: q("TRANSPORTE"), total: 0 };
-    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.enf + r.maq + r.forn;
+    const maq = mi.find(x => x.kind === `CILINDRO_${t.size}`)?._sum.quantity ?? 0; // dentro das máquinas de intubação
+    const setores = bal.filter(b => b.cylinderTypeId === t.id && INTERNAL_CODES.includes(b.location.code)).reduce((a, b) => a + b.quantity, 0); // nos locais internos
+    const r = { size: t.size as string, label: t.label, hCheio: q("HOSPITAL", "CHEIO"), hVazio: q("HOSPITAL", "VAZIO"), hIndisp: q("HOSPITAL", "INDISPONIVEL"), dom: q("DOMICILIO"), enf: q("ENFERMARIAS"), maq, setores, forn: q("TRANSPORTE"), total: 0 };
+    r.total = r.hCheio + r.hVazio + r.hIndisp + r.dom + r.enf + r.maq + r.setores + r.forn;
     return r;
   });
-  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "enf" | "maq" | "forn" | "total";
+  type K = "hCheio" | "hVazio" | "hIndisp" | "dom" | "enf" | "maq" | "setores" | "forn" | "total";
   const s = (k: K) => rows.reduce((a, r) => a + r[k], 0);
-  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), enf: s("enf"), maq: s("maq"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") + s("enf") };
+  const totals = { hCheio: s("hCheio"), hVazio: s("hVazio"), hIndisp: s("hIndisp"), dom: s("dom"), enf: s("enf"), maq: s("maq"), setores: s("setores"), forn: s("forn"), total: s("total"), hospital: s("hCheio") + s("hVazio") + s("hIndisp") + s("enf") };
   return { rows, totals };
 }
 
@@ -155,15 +157,17 @@ export async function reverseFlowmeter(p: { id: string; reason: string; userId: 
 }
 
 export async function flowmeterSummary() {
-  const [b, mi] = await Promise.all([
+  const [b, mi, ls] = await Promise.all([
     db.flowmeterBalance.findMany(),
     db.machineItem.groupBy({ by: ["kind"], where: { kind: { in: ["FLUXOMETRO", "FLUXOMETRO_INTUBACAO"] } }, _sum: { quantity: true } }),
+    db.flowmeterStock.aggregate({ _sum: { quantity: true } }),
   ]);
   const q = (l: string) => b.find(x => x.location === l)?.quantity ?? 0;
   const hospital = q("HOSPITAL"), domicilio = q("DOMICILIO"), enfermarias = q("ENFERMARIAS");
   const maquinas = mi.find(x => x.kind === "FLUXOMETRO")?._sum.quantity ?? 0;
   const maquinasIntub = mi.find(x => x.kind === "FLUXOMETRO_INTUBACAO")?._sum.quantity ?? 0;
-  return { hospital, domicilio, enfermarias, maquinas, maquinasIntub, total: hospital + domicilio + enfermarias + maquinas + maquinasIntub };
+  const locais = ls._sum.quantity ?? 0; // nos locais internos internos (comuns + intubação)
+  return { hospital, domicilio, enfermarias, maquinas, maquinasIntub, locais, total: hospital + domicilio + enfermarias + maquinas + maquinasIntub + locais };
 }
 
 // ---------- AJUSTE SIMPLES: "informe o total e onde estão" ----------
@@ -188,8 +192,9 @@ export async function setCylinderStock(targets: CylinderTarget[], by: { userId: 
         const cur = (loc: string, cond: StockCondition) => bal.find(b => b.locationId === loc && b.condition === cond)?.quantity ?? 0;
         const forn = bal.filter(b => b.locationId === T).reduce((a, b) => a + b.quantity, 0); // trocas com fornecedor: não alterado aqui
         const maq = (await tx.machineItem.aggregate({ where: { kind: `CILINDRO_${t.size}` as MachineItemKind }, _sum: { quantity: true } }))._sum.quantity ?? 0; // nas máquinas de intubação
-        const disp = t.total - t.vazios - t.dom - t.enf - t.indisp - forn - maq;
-        if (disp < 0) throw new StockError(`${SIZE_LABEL[t.size]}: vazios + domicílio + enfermarias + indisponíveis${forn ? " + com o fornecedor (" + forn + ")" : ""}${maq ? " + nas máquinas de intubação (" + maq + ")" : ""} passam do total (${t.total}).`);
+        const setores = bal.filter(b => locs.some(l => l.id === b.locationId && INTERNAL_CODES.includes(l.code))).reduce((a, b) => a + b.quantity, 0); // nos locais internos
+        const disp = t.total - t.vazios - t.dom - t.enf - t.indisp - forn - maq - setores;
+        if (disp < 0) throw new StockError(`${SIZE_LABEL[t.size]}: vazios + domicílio + enfermarias + indisponíveis${forn ? " + com o fornecedor (" + forn + ")" : ""}${maq ? " + nas máquinas de intubação (" + maq + ")" : ""}${setores ? " + nos setores (" + setores + ")" : ""} passam do total (${t.total}).`);
         const cells: [string, StockCondition, number][] = [[H, "CHEIO", disp], [H, "VAZIO", t.vazios], [H, "INDISPONIVEL", t.indisp], [D, "CHEIO", t.dom], [E, "CHEIO", t.enf]];
         for (const [loc, cond, target] of cells) {
           const delta = target - cur(loc, cond);
@@ -217,8 +222,9 @@ export async function setCylinderStock(targets: CylinderTarget[], by: { userId: 
 export async function setFlowmeterStock(t: { total: number; dom: number; enf: number }, by: { userId: string; userName: string }, requestKey?: string): Promise<{ changed: number; duplicate: boolean }> {
   if (![t.total, t.dom, t.enf].every(okInt)) throw new StockError("Use apenas números inteiros, zero ou maiores.");
   const maq = (await db.machineItem.aggregate({ where: { kind: { in: ["FLUXOMETRO", "FLUXOMETRO_INTUBACAO"] } }, _sum: { quantity: true } }))._sum.quantity ?? 0; // nas máquinas de intubação
-  const disp = t.total - t.dom - t.enf - maq;
-  if (disp < 0) throw new StockError("Em domicílio + nas enfermarias" + (maq ? " + nas máquinas de intubação (" + maq + ")" : "") + " passam do total de fluxômetros.");
+  const locais = (await db.flowmeterStock.aggregate({ _sum: { quantity: true } }))._sum.quantity ?? 0; // nos locais internos
+  const disp = t.total - t.dom - t.enf - maq - locais;
+  if (disp < 0) throw new StockError("Em domicílio + nas enfermarias" + (maq ? " + nas máquinas de intubação (" + maq + ")" : "") + (locais ? " + nos setores (" + locais + ")" : "") + " passam do total de fluxômetros.");
   if (requestKey && (await db.flowmeterMovement.findFirst({ where: { requestKey: { startsWith: requestKey + "|" } }, select: { id: true } }))) return { changed: 0, duplicate: true };
   try {
     const changed = await db.$transaction(async tx => {
@@ -325,4 +331,81 @@ export async function applyMachineMovement(i: MachineMoveInput): Promise<{ dupli
     if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente novamente.");
     throw e;
   }
+}
+
+// ---------- 15 LOCAIS INTERNOS ----------
+// Garante as linhas em "Location" (idempotente: o código é único, nunca duplica).
+export async function ensureInternalLocations(client: Prisma.TransactionClient) {
+  for (const l of INTERNAL_LOCATIONS) await client.location.upsert({ where: { code: l.code }, update: {}, create: { code: l.code, name: l.name } });
+  return client.location.findMany({ where: { code: { in: INTERNAL_CODES } }, select: { id: true, code: true } });
+}
+
+async function lfdec(tx: Tx, locationId: string, kind: FlowmeterKind, qty: number, label: string) {
+  const r = await tx.flowmeterStock.updateMany({ where: { locationId, kind, quantity: { gte: qty } }, data: { quantity: { decrement: qty } } });
+  if (r.count !== 1) {
+    const b = await tx.flowmeterStock.findUnique({ where: { locationId_kind: { locationId, kind } } });
+    throw new StockError(`Saldo insuficiente: ${label} tem ${b?.quantity ?? 0}.`);
+  }
+}
+const lfinc = (tx: Tx, locationId: string, kind: FlowmeterKind, qty: number) =>
+  tx.flowmeterStock.upsert({ where: { locationId_kind: { locationId, kind } }, create: { locationId, kind, quantity: qty }, update: { quantity: { increment: qty } } });
+
+export type LocalFlowInput = { operation: LocalFlowOperation; kind: FlowmeterKind; quantity: number; fromCode?: string; toCode?: string;
+  occurredAt: Date; responsibleName: string; notes?: string; requestKey?: string; userId: string };
+
+// Fluxômetros: estoque central (HOSPITAL) ⇄ local, local ⇄ local, entrada nova e retirada. Cada unidade fica em um único lugar.
+export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate: boolean }> {
+  if (!Number.isInteger(i.quantity) || i.quantity < 1 || i.quantity > 1_000_000) throw new StockError("Quantidade deve ser maior que zero.");
+  const needFrom = i.operation === "DEVOLUCAO_CENTRAL" || i.operation === "TRANSFERENCIA" || i.operation === "RETIRADA";
+  const needTo = i.operation === "SAIDA_CENTRAL" || i.operation === "TRANSFERENCIA" || i.operation === "ENTRADA_NOVA";
+  if (needFrom && !(i.fromCode && INTERNAL_CODES.includes(i.fromCode))) throw new StockError("Local de origem inválido.");
+  if (needTo && !(i.toCode && INTERNAL_CODES.includes(i.toCode))) throw new StockError("Local de destino inválido.");
+  if (needTo && i.toCode && LEGACY_CODES.includes(i.toCode)) throw new StockError(LEGACY_MSG);
+  if (i.operation === "TRANSFERENCIA" && i.fromCode === i.toCode) throw new StockError("Origem e destino devem ser diferentes.");
+  if ((i.operation === "SAIDA_CENTRAL" || i.operation === "DEVOLUCAO_CENTRAL") && i.kind === "INTUBACAO") throw new StockError("Fluxômetro de intubação não existe no estoque central: use entrada nova ou transferência entre locais.");
+  if (i.operation === "RETIRADA" && !(i.notes && i.notes.trim().length >= 3)) throw new StockError("Informe o motivo da retirada.");
+  if (i.requestKey && (await db.flowmeterLocationMovement.findUnique({ where: { requestKey: i.requestKey }, select: { id: true } }))) return { duplicate: true };
+  try {
+    await db.$transaction(async tx => {
+      const locs = await ensureInternalLocations(tx);
+      const idOf = (c?: string) => locs.find(l => l.code === c)?.id ?? null;
+      const fromId = needFrom ? idOf(i.fromCode) : null, toId = needTo ? idOf(i.toCode) : null;
+      const q = i.quantity;
+      if (needFrom) await lfdec(tx, fromId!, i.kind, q, `${LOC_LABEL[i.fromCode!]} (${FM_KIND_LABEL[i.kind]})`);
+      if (needTo) await lfinc(tx, toId!, i.kind, q);
+      const base = { occurredAt: i.occurredAt, responsibleName: i.responsibleName, createdById: i.userId };
+      if (i.operation === "SAIDA_CENTRAL") { // sai do saldo central; fica registrado também no histórico central
+        await fdec(tx, "HOSPITAL", q);
+        await tx.flowmeterMovement.create({ data: { ...base, operation: "LOCAL", quantity: q, fromLocation: "HOSPITAL", notes: `Local: ${LOC_LABEL[i.toCode!]} (saída)` } });
+      }
+      if (i.operation === "DEVOLUCAO_CENTRAL") {
+        await finc(tx, "HOSPITAL", q);
+        await tx.flowmeterMovement.create({ data: { ...base, operation: "LOCAL", quantity: q, toLocation: "HOSPITAL", notes: `Local: ${LOC_LABEL[i.fromCode!]} (devolução)` } });
+      }
+      await tx.flowmeterLocationMovement.create({ data: { ...base, operation: i.operation, kind: i.kind, quantity: q, fromLocationId: fromId, toLocationId: toId, notes: i.notes?.trim() || null, requestKey: i.requestKey ?? null } });
+    }, { isolationLevel: "Serializable" });
+    await audit({ userId: i.userId, action: "FLUXOMETRO_LOCAL_" + i.operation, entity: "FlowmeterStock", after: { kind: i.kind, quantity: i.quantity, from: i.fromCode, to: i.toCode } });
+    return { duplicate: false };
+  } catch (e) {
+    if (isDup(e)) return { duplicate: true };
+    if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente novamente.");
+    throw e;
+  }
+}
+
+// Resumo de cada um dos locais (cilindros por condição, fluxômetros por tipo e máquinas presentes)
+export async function locationOverview() {
+  const where = { location: { code: { in: INTERNAL_CODES } } };
+  const [bal, fl, mach] = await Promise.all([
+    db.stockBalance.findMany({ where, include: { location: { select: { code: true } } } }),
+    db.flowmeterStock.findMany({ where, include: { location: { select: { code: true } } } }),
+    db.machine.findMany({ where: { ...where, active: true }, select: { location: { select: { code: true } } } }),
+  ]);
+  return ALL_INTERNAL_LOCATIONS.map(l => {
+    const b = bal.filter(x => x.location.code === l.code);
+    const c = (cond: string) => b.filter(x => x.condition === cond).reduce((a, x) => a + x.quantity, 0);
+    const f = (k: string) => fl.filter(x => x.location.code === l.code && x.kind === k).reduce((a, x) => a + x.quantity, 0);
+    return { code: l.code as string, name: l.name as string, cheios: c("CHEIO"), vazios: c("VAZIO"), indisp: c("INDISPONIVEL"), cil: b.reduce((a, x) => a + x.quantity, 0),
+      flowComum: f("COMUM"), flowIntub: f("INTUBACAO"), machines: mach.filter(m => m.location.code === l.code).length };
+  }).filter(r => !LEGACY_CODES.includes(r.code) || r.cil + r.flowComum + r.flowIntub + r.machines > 0); // o local antigo só aparece enquanto tiver saldo
 }

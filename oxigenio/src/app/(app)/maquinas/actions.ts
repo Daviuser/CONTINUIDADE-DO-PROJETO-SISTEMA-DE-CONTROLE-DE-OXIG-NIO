@@ -7,26 +7,27 @@ import { audit } from "@/lib/audit";
 import { requireWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
 import { applyMachineMovement, StockError } from "@/lib/stock";
-import { LOC_LABEL, MACHINE_KINDS } from "@/lib/labels";
+import { LOC_LABEL, MACHINE_KINDS, MACHINE_LOCATIONS, LEGACY_CODES, LEGACY_MSG } from "@/lib/labels";
 
 const machineSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(2, "Informe o nome da máquina.").max(80),
   code: z.string().trim().max(40).optional(),
-  location: z.enum(["HOSPITAL", "ENFERMARIAS"], { errorMap: () => ({ message: "Escolha o local." }) }),
+  location: z.string().refine(v => MACHINE_LOCATIONS.some(l => l.code === v), "Escolha o local."),
   notes: z.string().max(500).optional(),
 });
 const go = (path: string, q: string): never => redirect(`${path}?${q}`);
 const err = (path: string, m: string): never => go(path, `erro=${encodeURIComponent(m)}`);
 
-async function locationId(code: "HOSPITAL" | "ENFERMARIAS") {
-  return (await db.location.upsert({ where: { code }, update: {}, create: { code, name: LOC_LABEL[code] }, select: { id: true } })).id;
+async function locationId(code: string) {
+  return (await db.location.upsert({ where: { code }, update: {}, create: { code, name: LOC_LABEL[code] ?? code }, select: { id: true } })).id;
 }
 
 export async function createMachine(fd: FormData) {
   const user = await requireWriter();
   const p = machineSchema.safeParse(formObj(fd));
   if (!p.success) return err("/maquinas", p.error.issues[0].message);
+  if (LEGACY_CODES.includes(p.data.location)) return err("/maquinas", LEGACY_MSG);
   try {
     const m = await db.machine.create({ data: { name: p.data.name, code: p.data.code || null, notes: p.data.notes || null, locationId: await locationId(p.data.location) } });
     await audit({ userId: user.id, action: "MAQUINA_CRIADA", entity: "Machine", entityId: m.id, after: { name: m.name, code: m.code, location: p.data.location } });
@@ -46,12 +47,20 @@ export async function updateMachine(fd: FormData) {
   const active = fd.get("active") === "on";
   const before = await db.machine.findUnique({ where: { id }, include: { location: true } });
   if (!before) return go("/maquinas", "erro=" + encodeURIComponent("Máquina não encontrada."));
+  if (LEGACY_CODES.includes(p.data.location) && before.location.code !== p.data.location) return err(back, LEGACY_MSG);
   if (!active && before.active) {
     const left = (await db.machineItem.aggregate({ where: { machineId: id }, _sum: { quantity: true } }))._sum.quantity ?? 0;
     if (left > 0) return err(back, `A máquina ainda tem ${left} item(ns). Devolva, transfira ou retire antes de desativar.`);
   }
   try {
-    const after = await db.machine.update({ where: { id }, data: { name: p.data.name, code: p.data.code || null, notes: p.data.notes || null, active, locationId: await locationId(p.data.location) } });
+    const newLocId = await locationId(p.data.location);
+    const after = await db.$transaction(async tx => {
+      const upd = await tx.machine.update({ where: { id }, data: { name: p.data.name, code: p.data.code || null, notes: p.data.notes || null, active, locationId: newLocId } });
+      // mudança de local: os itens acompanham a máquina (nada é duplicado nem perdido) e a mudança fica no histórico
+      if (newLocId !== before.locationId) await tx.machineRelocation.create({ data: { machineId: id, fromLocationId: before.locationId, toLocationId: newLocId,
+        occurredAt: parseDate(todayStr()), responsibleName: user.name, notes: String(fd.get("moveNotes") ?? "").trim() || null, createdById: user.id } });
+      return upd;
+    });
     await audit({ userId: user.id, action: "MAQUINA_EDITADA", entity: "Machine", entityId: id,
       before: { name: before.name, code: before.code, location: before.location.code, active: before.active }, after: { name: after.name, code: after.code, location: p.data.location, active } });
   } catch (e) {

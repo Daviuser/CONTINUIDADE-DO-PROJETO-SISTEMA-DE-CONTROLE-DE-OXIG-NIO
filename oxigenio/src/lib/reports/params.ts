@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { INTERNAL_CODES } from "@/lib/labels";
 
-export const REPORT_IDS = ["abastecimento", "domiciliar", "trocas", "inventario", "fluxometros", "movimentacoes", "consolidado"] as const;
+export const REPORT_IDS = ["abastecimento", "domiciliar", "trocas", "inventario", "fluxometros", "movimentacoes", "consolidado", "localizacao"] as const;
 export type ReportId = (typeof REPORT_IDS)[number];
 
 export const REPORT_TYPES: { id: ReportId; label: string; desc: string; icon: string; personal: boolean }[] = [
@@ -10,6 +11,7 @@ export const REPORT_TYPES: { id: ReportId; label: string; desc: string; icon: st
   { id: "inventario", label: "Inventário geral de oxigênio", desc: "Cilindros por categoria e local, e fluxômetros. Posição na data de emissão.", icon: "cylinder", personal: false },
   { id: "fluxometros", label: "Controle de fluxômetros", desc: "Totais no hospital e em domicílio e movimentações do período.", icon: "gauge", personal: false },
   { id: "movimentacoes", label: "Histórico de movimentações", desc: "Todas as movimentações de cilindros e fluxômetros no período.", icon: "chart", personal: false },
+  { id: "localizacao", label: "Equipamentos por local", desc: "Cilindros (cheios/vazios por tamanho), fluxômetros e máquinas de intubação em cada um dos locais.", icon: "building", personal: false },
   { id: "consolidado", label: "Consolidado do período", desc: "Posição do estoque, resumo por operação e pendências.", icon: "building", personal: false },
 ];
 
@@ -23,6 +25,7 @@ export const paramsSchema = z.object({
   size: z.preprocess(blank, z.enum(["P", "M", "G"]).optional()),
   responsible: text(), supplier: text(), bairro: text(), povoado: text(),
   patient: z.preprocess(blank, z.string().max(40).optional()),
+  local: z.preprocess(blank, z.string().refine(v => INTERNAL_CODES.includes(v), "Local inválido.").optional()),
 }).refine(p => !p.from || !p.to || p.from <= p.to, { message: "A data inicial não pode ser posterior à data final.", path: ["from"] });
 
 export type ReportParams = z.infer<typeof paramsSchema>;

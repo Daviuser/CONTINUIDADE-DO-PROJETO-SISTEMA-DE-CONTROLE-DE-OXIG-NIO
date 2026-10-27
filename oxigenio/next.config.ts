@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 const config: NextConfig = {
+  turbopack: { root: process.cwd() },
   serverExternalPackages: ["@node-rs/argon2", "pdfmake"],
   experimental: { serverActions: { bodySizeLimit: "5mb" } },
   outputFileTracingIncludes: { "/relatorios/pdf": ["./public/brand/logo.jpeg", "./node_modules/pdfkit/js/data/**/*", "./node_modules/pdfmake/build/vfs_fonts.js"] },
