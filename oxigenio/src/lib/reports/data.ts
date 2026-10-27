@@ -72,14 +72,14 @@ const ORDER = [{ occurredAt: "asc" as const }, { createdAt: "asc" as const }];
 const MAX_RECEIPTS = 25;
 async function receiptItems(rows: { occurredAt: Date; responsibleName: string; quantity: number; notes: string | null; cylinderType: { size: string }; receipt: { pathname: string; contentType: string } | null }[]): Promise<ReceiptItem[]> {
   const withPhoto = rows.filter(r => r.receipt);
-  const items = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async r => {
+  const items: ReceiptItem[] = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async r => {
     const caption = `Recebimento de ${fmtDate(r.occurredAt)} · Cilindros ${r.cylinderType.size}: ${r.quantity} · Recebido por ${r.responsibleName}${r.notes ? " · Obs.: " + r.notes : ""}`;
     const rc = r.receipt!;
     if (rc.contentType !== "image/jpeg" && rc.contentType !== "image/png") return { caption, note: "Foto em formato que o PDF não suporta (WEBP). Consulte o recibo no sistema." };
     const image = await receiptDataUrl(rc.pathname, rc.contentType);
     return image ? { caption, image } : { caption, note: "Não foi possível carregar a foto do recibo neste momento." };
   }));
-  if (withPhoto.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${withPhoto.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" } as ReceiptItem);
+  if (withPhoto.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${withPhoto.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" });
   return items;
 }
 
