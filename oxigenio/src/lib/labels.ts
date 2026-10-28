@@ -22,6 +22,7 @@ export const INTERNAL_LOCATIONS = [
   { code: "ENFERMARIA_4", name: "Enfermaria 4" }, { code: "ENFERMARIA_5", name: "Enfermaria 5" }, { code: "ENFERMARIA_6", name: "Enfermaria 6" },
   { code: "ENFERMARIA_7", name: "Enfermaria 7" }, { code: "ISOLAMENTO", name: "Isolamento" }, { code: "PEDIATRIA", name: "Pediatria" },
   { code: "ALOJ_CONJUNTO", name: "Alojamento Conjunto" }, { code: "ALOJ_CIRURGICO", name: "Alojamento Cirúrgico" }, { code: "SALA_PARTO", name: "Sala de Parto" }, { code: "SALA_AO_LADO_PARTO", name: "Sala ao lado da Sala de Parto" },
+  { code: "CENTRO_CIRURGICO", name: "Centro Cirúrgico" },
   { code: "PRE_PARTO", name: "Pré-Parto" }, { code: "SALA_INTUBACAO_BEBE", name: "Sala de Intubação de Bebê" }, { code: "EMERGENCIA", name: "Emergência" }, { code: "ESTABILIZACAO", name: "Estabilização" },
 ] as const;
 // Local antigo "Emergência e Estabilização": a linha existente (mesmo id) guarda o saldo anterior até ele ser transferido
