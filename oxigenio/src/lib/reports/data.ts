@@ -75,7 +75,7 @@ async function receiptItems(rows: { occurredAt: Date; responsibleName: string; q
   const groups = new Map<string, { rc: { pathname: string; contentType: string }; list: typeof rows }>();
   for (const r of rows) if (r.receipt) { const g = groups.get(r.receipt.pathname) ?? { rc: r.receipt, list: [] as typeof rows }; g.list.push(r); groups.set(r.receipt.pathname, g); }
   const all = [...groups.values()];
-  const items = await Promise.all(all.slice(0, MAX_RECEIPTS).map(async g => {
+  const items: ReceiptItem[] = await Promise.all(all.slice(0, MAX_RECEIPTS).map(async g => {
     const first = g.list[0];
     const sizes = ["P", "M", "G"].map(sz => { const q = sum(g.list.filter(r => r.cylinderType.size === sz).map(r => r.quantity)); return q ? `${sz}: ${q}` : ""; }).filter(Boolean).join(" · ");
     const caption = `Recebimento de ${fmtDate(first.occurredAt)} · Cilindros ${sizes} · Recebido por ${first.responsibleName}${first.notes ? " · Obs.: " + first.notes : ""}`;
@@ -83,7 +83,7 @@ async function receiptItems(rows: { occurredAt: Date; responsibleName: string; q
     const image = await receiptDataUrl(g.rc.pathname, g.rc.contentType);
     return image ? { caption, image } : { caption, note: "Não foi possível carregar a foto do recibo neste momento." };
   }));
-  if (all.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${all.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" } as ReceiptItem);
+  if (all.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${all.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" });
   return items;
 }
 
