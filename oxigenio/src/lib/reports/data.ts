@@ -71,15 +71,19 @@ const ORDER = [{ occurredAt: "asc" as const }, { createdAt: "asc" as const }];
 // Recibos do fornecedor (foto) ligados a cada recebimento. Só JPEG/PNG podem ser embutidos no PDF; limite de 25 fotos por documento.
 const MAX_RECEIPTS = 25;
 async function receiptItems(rows: { occurredAt: Date; responsibleName: string; quantity: number; notes: string | null; cylinderType: { size: string }; receipt: { pathname: string; contentType: string } | null }[]): Promise<ReceiptItem[]> {
-  const withPhoto = rows.filter(r => r.receipt);
-  const items: ReceiptItem[] = await Promise.all(withPhoto.slice(0, MAX_RECEIPTS).map(async r => {
-    const caption = `Recebimento de ${fmtDate(r.occurredAt)} · Cilindros ${r.cylinderType.size}: ${r.quantity} · Recebido por ${r.responsibleName}${r.notes ? " · Obs.: " + r.notes : ""}`;
-    const rc = r.receipt!;
-    if (rc.contentType !== "image/jpeg" && rc.contentType !== "image/png") return { caption, note: "Foto em formato que o PDF não suporta (WEBP). Consulte o recibo no sistema." };
-    const image = await receiptDataUrl(rc.pathname, rc.contentType);
+  // Uma foto pode valer para vários registros (P, M e G do mesmo abastecimento): agrupa pela foto e mostra uma só vez.
+  const groups = new Map<string, { rc: { pathname: string; contentType: string }; list: typeof rows }>();
+  for (const r of rows) if (r.receipt) { const g = groups.get(r.receipt.pathname) ?? { rc: r.receipt, list: [] as typeof rows }; g.list.push(r); groups.set(r.receipt.pathname, g); }
+  const all = [...groups.values()];
+  const items = await Promise.all(all.slice(0, MAX_RECEIPTS).map(async g => {
+    const first = g.list[0];
+    const sizes = ["P", "M", "G"].map(sz => { const q = sum(g.list.filter(r => r.cylinderType.size === sz).map(r => r.quantity)); return q ? `${sz}: ${q}` : ""; }).filter(Boolean).join(" · ");
+    const caption = `Recebimento de ${fmtDate(first.occurredAt)} · Cilindros ${sizes} · Recebido por ${first.responsibleName}${first.notes ? " · Obs.: " + first.notes : ""}`;
+    if (g.rc.contentType !== "image/jpeg" && g.rc.contentType !== "image/png") return { caption, note: "Foto em formato que o PDF não suporta (WEBP). Consulte o recibo no sistema." };
+    const image = await receiptDataUrl(g.rc.pathname, g.rc.contentType);
     return image ? { caption, image } : { caption, note: "Não foi possível carregar a foto do recibo neste momento." };
   }));
-  if (withPhoto.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${withPhoto.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" });
+  if (all.length > MAX_RECEIPTS) items.push({ caption: `Há mais ${all.length - MAX_RECEIPTS} recibo(s) neste período, não exibidos aqui. Reduza o período para ver todos.`, note: "" } as ReceiptItem);
   return items;
 }
 
@@ -135,7 +139,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
       blocks: [
         { heading: "MOVIMENTAÇÕES DO PERÍODO", columns: [{ header: "Data", width: 55 }, { header: "Operação", width: "*" }, { header: "Tipo", width: 30, align: "center" }, { header: "Qtd.", width: 34, align: "right" }, { header: "Responsável", width: "*" }, { header: "Observações", width: "*" }],
           rows: rows.map(r => [fmtDate(r.occurredAt), r.operation === "ENVIO_FORNECEDOR" ? "Envio de vazios" : "Retorno de cheios", r.cylinderType.size, r.quantity, r.responsibleName, dash(r.notes)]), note: limitNote(rows.length) },
-        { heading: "PENDÊNCIAS ATUAIS (vazios enviados − cheios recebidos)", columns: [{ header: "Categoria", width: "*" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
+        { heading: "VAZIOS COM O FORNECEDOR (pendentes de troca)", columns: [{ header: "Categoria", width: "*" }, { header: "Enviados", width: 70, align: "right" }, { header: "Recebidos", width: 70, align: "right" }, { header: "Pendente", width: 70, align: "right" }],
           rows: pf.map(x => [x.label, x.sent, x.returned, x.pending]), totals: ["Total pendente", sum(pf.map(x => x.sent)), sum(pf.map(x => x.returned)), sum(pf.map(x => x.pending))] }],
       signatures: SIGNATURES, receipts: await receiptItems(rows.filter(r => r.operation === "RETORNO_FORNECEDOR")) };
   }

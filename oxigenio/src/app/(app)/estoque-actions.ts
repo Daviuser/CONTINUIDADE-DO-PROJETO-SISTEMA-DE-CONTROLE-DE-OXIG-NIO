@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
-import { applyMovement, reverseMovement, StockError, type MoveInput } from "@/lib/stock";
+import { applyMovement, applySupplyBatch, reverseMovement, StockError, type MoveInput } from "@/lib/stock";
 import { saveReceipt, removeReceipt, type ReceiptMeta } from "@/lib/receipts";
 
 const base = z.object({
@@ -67,10 +67,6 @@ export async function registerInitialStock(fd: FormData) {
     operation: "ENTRADA_INICIAL", to: { loc: d.location, cond: d.location === "DOMICILIO" ? "CHEIO" : d.location === "TRANSPORTE" ? "VAZIO" : d.condition } }));
 }
 
-export async function registerSupply(fd: FormData) {
-  return go(fd, none, async () => ({ operation: "ABASTECIMENTO", to: { loc: "HOSPITAL", cond: "CHEIO" } }), { receipt: true });
-}
-
 export async function registerUnavailable(fd: FormData) {
   return go(fd, z.object({ direction: z.enum(["INDISPONIVEL", "DISPONIVEL"]), condition: z.enum(["CHEIO", "VAZIO"]) }), async d => {
     if (d.direction === "INDISPONIVEL" && !d.notes) throw new StockError("Informe o motivo da indisponibilidade.");
@@ -95,10 +91,6 @@ export async function registerSupplierSend(fd: FormData) {
   return go(fd, none, async () => ({ operation: "ENVIO_FORNECEDOR", from: { loc: "HOSPITAL", cond: "VAZIO" }, to: { loc: "TRANSPORTE", cond: "VAZIO" } }));
 }
 
-export async function registerSupplierReturn(fd: FormData) {
-  return go(fd, none, async () => ({ operation: "RETORNO_FORNECEDOR", from: { loc: "TRANSPORTE", cond: "VAZIO" }, to: { loc: "HOSPITAL", cond: "CHEIO" } }), { receipt: true });
-}
-
 export async function reverseCylinderMovement(fd: FormData) {
   const user = await requireWriter();
   const back = z.enum(["/cilindros", "/abastecimentos", "/trocas", "/domicilio"]).catch("/cilindros").parse(fd.get("back"));
@@ -106,4 +98,52 @@ export async function reverseCylinderMovement(fd: FormData) {
   try { await reverseMovement({ id: String(fd.get("id")), reason: String(fd.get("reason") ?? ""), userId: user.id, userName: user.name }); }
   catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
   redirect(msg ? `${back}?erro=${encodeURIComponent(msg)}` : `${back}?ok=1`);
+}
+
+// Abastecimento: P, M e G no mesmo formulário. Campos vazios = sem abastecimento; só números inteiros >= 0.
+const supplyBase = z.object({
+  occurredAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Informe a data."),
+  responsibleName: z.string().trim().min(2, "Informe o responsável."),
+  notes: z.string().max(500).optional(),
+  requestKey: z.string().max(80).optional(),
+});
+
+export async function registerSupplyBatch(fd: FormData) {
+  const user = await requireWriter();
+  const fail = (m: string): never => redirect(`/abastecimentos?erro=${encodeURIComponent(m)}`);
+  const p = supplyBase.safeParse(formObj(fd));
+  if (!p.success) return fail(p.error.issues[0].message);
+  if (p.data.occurredAt > todayStr()) return fail("A data não pode ser futura.");
+  const quantities: Partial<Record<"P" | "M" | "G", number>> = {};
+  for (const sz of ["P", "M", "G"] as const) {
+    const v = String(fd.get(`qty_${sz}`) ?? "").trim();
+    if (v === "") continue;
+    if (!/^\d+$/.test(v)) return fail(`Categoria ${sz}: use apenas números inteiros, sem decimais nem valores negativos.`);
+    const n = Number(v);
+    if (n > 100000) return fail(`Categoria ${sz}: quantidade muito alta.`);
+    if (n > 0) quantities[sz] = n;
+  }
+  if (!Object.keys(quantities).length) return fail("Informe pelo menos uma quantidade maior que zero (P, M ou G).");
+
+  // Foto do recibo (opcional): enviada antes; se falhar, nada é registrado. Uma foto vale para todo o abastecimento.
+  let receipt: ReceiptMeta | undefined;
+  const file = fd.get("receipt");
+  if (file instanceof File && file.size > 0) {
+    try { receipt = await saveReceipt(file); }
+    catch (e) {
+      if (e instanceof StockError) return fail(e.message);
+      console.error("Falha no envio do recibo:", e instanceof Error ? e.message : "erro");
+      return fail("Não foi possível enviar a foto do recibo. Nada foi registrado; tente novamente ou salve sem a foto.");
+    }
+  }
+  let msg: string | null = null, dup = false, resumo = "";
+  try {
+    const r = await applySupplyBatch({ quantities, occurredAt: parseDate(p.data.occurredAt), responsibleName: p.data.responsibleName, notes: p.data.notes, requestKey: p.data.requestKey, userId: user.id, receipt });
+    dup = r.duplicate; resumo = r.saved.map(x => `${x.size}: ${x.quantity}`).join(" · ");
+  } catch (e) {
+    if (e instanceof StockError) msg = e.message;
+    else { if (receipt) await removeReceipt(receipt.pathname); throw e; }
+  }
+  if (receipt && (dup || msg)) await removeReceipt(receipt.pathname);
+  redirect(msg ? `/abastecimentos?erro=${encodeURIComponent(msg)}` : dup ? "/abastecimentos?ok=dup" : `/abastecimentos?ok=lote&resumo=${encodeURIComponent(resumo)}`);
 }

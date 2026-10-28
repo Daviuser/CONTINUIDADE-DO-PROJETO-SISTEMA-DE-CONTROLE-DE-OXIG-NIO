@@ -5,7 +5,7 @@ import type { CylinderSize, StockCondition, StockOperation, FlowmeterLocation, F
 import type { ReceiptMeta } from "./receipts";
 import { db } from "./db";
 import { audit } from "./audit";
-import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL, ALL_INTERNAL_LOCATIONS, LEGACY_CODES, LEGACY_MSG, INTERNAL_CODES, FM_KIND_LABEL } from "./labels";
+import { LOC_LABEL, COND_LABEL, FM_LOC_LABEL, SIZE_LABEL, MACHINE_KIND_LABEL, INTERNAL_LOCATIONS, ALL_INTERNAL_LOCATIONS, LEGACY_CODES, LEGACY_MSG, INTERNAL_CODES, FM_KIND_LABEL } from "./labels";
 import { parseDate, todayStr } from "./format";
 
 export class StockError extends Error {}
@@ -96,18 +96,19 @@ export async function cylinderSummary() {
   return { rows, totals };
 }
 
-// Pendência de troca = vazios enviados − cheios recebidos de volta, por categoria (fornecedor único).
+// Vazios com o fornecedor = SALDO atual (Com o fornecedor / vazio). "Recebidos" = devoluções antigas + abastecimentos que baixaram vazios pendentes.
 export async function pendingBySize() {
   const base = { status: "CONFIRMADA" as const, reversalOfId: null };
-  const [sent, ret, types] = await Promise.all([
+  const [sent, ret, settled, types, bal] = await Promise.all([
     db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...base, operation: "ENVIO_FORNECEDOR" }, _sum: { quantity: true } }),
     db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...base, operation: "RETORNO_FORNECEDOR" }, _sum: { quantity: true } }),
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...base, operation: "ABASTECIMENTO", fromLocation: { code: "TRANSPORTE" } }, _sum: { quantity: true } }),
     db.cylinderType.findMany({ orderBy: { size: "asc" } }),
+    db.stockBalance.findMany({ where: { location: { code: "TRANSPORTE" }, condition: "VAZIO" } }),
   ]);
   return types.map(t => {
-    const s = sent.find(x => x.cylinderTypeId === t.id)?._sum.quantity ?? 0;
-    const r = ret.find(x => x.cylinderTypeId === t.id)?._sum.quantity ?? 0;
-    return { size: t.size as string, label: t.label, sent: s, returned: r, pending: s - r };
+    const q = (a: typeof sent) => a.find(x => x.cylinderTypeId === t.id)?._sum.quantity ?? 0;
+    return { size: t.size as string, label: t.label, sent: q(sent), returned: q(ret) + q(settled), pending: bal.filter(b => b.cylinderTypeId === t.id).reduce((a, b) => a + b.quantity, 0) };
   });
 }
 
@@ -333,23 +334,11 @@ export async function applyMachineMovement(i: MachineMoveInput): Promise<{ dupli
   }
 }
 
-// ---------- LOCAIS INTERNOS ----------
-// Provisionados pelas migrations; validação somente leitura para manter a transação de estoque enxuta.
+// ---------- 15 LOCAIS INTERNOS ----------
+// Garante as linhas em "Location" (idempotente: o código é único, nunca duplica).
 export async function ensureInternalLocations(client: Prisma.TransactionClient) {
-  const locs = await client.location.findMany({
-    where: { code: { in: INTERNAL_CODES } },
-    select: { id: true, code: true, name: true },
-  });
-  const byCode = new Map(locs.map(location => [location.code, location] as const));
-  const invalid = ALL_INTERNAL_LOCATIONS.filter(location => byCode.get(location.code)?.name !== location.name);
-  if (invalid.length > 0) {
-    const details = invalid.map(location => {
-      const found = byCode.get(location.code);
-      return found ? `${location.code} (nome atual: "${found.name}")` : location.code;
-    });
-    throw new StockError(`Locais internos ausentes ou com nome divergente: ${details.join(", ")}. Verifique se todas as migrations de locais foram aplicadas.`);
-  }
-  return locs;
+  for (const l of INTERNAL_LOCATIONS) await client.location.upsert({ where: { code: l.code }, update: {}, create: { code: l.code, name: l.name } });
+  return client.location.findMany({ where: { code: { in: INTERNAL_CODES } }, select: { id: true, code: true } });
 }
 
 async function lfdec(tx: Tx, locationId: string, kind: FlowmeterKind, qty: number, label: string) {
@@ -376,9 +365,10 @@ export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate
   if (i.operation === "TRANSFERENCIA" && i.fromCode === i.toCode) throw new StockError("Origem e destino devem ser diferentes.");
   if ((i.operation === "SAIDA_CENTRAL" || i.operation === "DEVOLUCAO_CENTRAL") && i.kind === "INTUBACAO") throw new StockError("Fluxômetro de intubação não existe no estoque central: use entrada nova ou transferência entre locais.");
   if (i.operation === "RETIRADA" && !(i.notes && i.notes.trim().length >= 3)) throw new StockError("Informe o motivo da retirada.");
-  const locs = await ensureInternalLocations(db);
+  if (i.requestKey && (await db.flowmeterLocationMovement.findUnique({ where: { requestKey: i.requestKey }, select: { id: true } }))) return { duplicate: true };
   try {
     await db.$transaction(async tx => {
+      const locs = await ensureInternalLocations(tx);
       const idOf = (c?: string) => locs.find(l => l.code === c)?.id ?? null;
       const fromId = needFrom ? idOf(i.fromCode) : null, toId = needTo ? idOf(i.toCode) : null;
       const q = i.quantity;
@@ -394,7 +384,7 @@ export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate
         await tx.flowmeterMovement.create({ data: { ...base, operation: "LOCAL", quantity: q, toLocation: "HOSPITAL", notes: `Local: ${LOC_LABEL[i.fromCode!]} (devolução)` } });
       }
       await tx.flowmeterLocationMovement.create({ data: { ...base, operation: i.operation, kind: i.kind, quantity: q, fromLocationId: fromId, toLocationId: toId, notes: i.notes?.trim() || null, requestKey: i.requestKey ?? null } });
-    }, { isolationLevel: "Serializable", timeout: 15_000 });
+    }, { isolationLevel: "Serializable" });
     await audit({ userId: i.userId, action: "FLUXOMETRO_LOCAL_" + i.operation, entity: "FlowmeterStock", after: { kind: i.kind, quantity: i.quantity, from: i.fromCode, to: i.toCode } });
     return { duplicate: false };
   } catch (e) {
@@ -419,4 +409,48 @@ export async function locationOverview() {
     return { code: l.code as string, name: l.name as string, cheios: c("CHEIO"), vazios: c("VAZIO"), indisp: c("INDISPONIVEL"), cil: b.reduce((a, x) => a + x.quantity, 0),
       flowComum: f("COMUM"), flowIntub: f("INTUBACAO"), machines: mach.filter(m => m.location.code === l.code).length };
   }).filter(r => !LEGACY_CODES.includes(r.code) || r.cil + r.flowComum + r.flowIntub + r.machines > 0); // o local antigo só aparece enquanto tiver saldo
+}
+
+// ---------- ABASTECIMENTO (P, M e G de uma vez) ----------
+// Tudo em UMA transação: se qualquer categoria falhar, nada é confirmado. Só categorias com quantidade > 0 geram registros.
+// Cheios recebidos primeiro baixam os vazios que estavam pendentes com o fornecedor (mesma troca, sem duplicar o estoque);
+// o que passar disso entra como cilindros novos no estoque cheio do hospital.
+export type SupplyBatchInput = { quantities: Partial<Record<CylinderSize, number>>; occurredAt: Date; responsibleName: string; notes?: string; requestKey?: string; userId: string; receipt?: ReceiptMeta };
+
+export async function applySupplyBatch(i: SupplyBatchInput): Promise<{ duplicate: boolean; saved: { size: CylinderSize; quantity: number; settled: number }[] }> {
+  const entries = (["P", "M", "G"] as const).map(sz => [sz, i.quantities[sz] ?? 0] as const).filter(([, q]) => q > 0);
+  if (!entries.length) throw new StockError("Informe pelo menos uma quantidade maior que zero (P, M ou G).");
+  for (const [, q] of entries) if (!Number.isInteger(q) || q > 1_000_000) throw new StockError("Use apenas números inteiros não negativos.");
+  if (i.requestKey && (await db.stockMovement.findFirst({ where: { requestKey: { startsWith: i.requestKey + "|" } }, select: { id: true } }))) return { duplicate: true, saved: [] };
+  try {
+    const saved = await db.$transaction(async tx => {
+      const [locs, types] = await Promise.all([tx.location.findMany({ where: { code: { in: ["HOSPITAL", "TRANSPORTE"] } }, select: { id: true, code: true } }), tx.cylinderType.findMany({ select: { id: true, size: true } })]);
+      const H = locs.find(l => l.code === "HOSPITAL")?.id, T = locs.find(l => l.code === "TRANSPORTE")?.id;
+      if (!H || !T) throw new StockError("Localização não cadastrada (rode o seed).");
+      const out: { size: CylinderSize; quantity: number; settled: number }[] = [];
+      let n = 0;
+      for (const [size, q] of entries) {
+        const type = types.find(x => x.size === size);
+        if (!type) throw new StockError("Tipo de cilindro não cadastrado (rode o seed).");
+        const pend = (await tx.stockBalance.findUnique({ where: { locationId_cylinderTypeId_condition: { locationId: T, cylinderTypeId: type.id, condition: "VAZIO" } } }))?.quantity ?? 0;
+        const settled = Math.min(q, pend);
+        for (const part of [{ qty: settled, fromSupplier: true }, { qty: q - settled, fromSupplier: false }].filter(x => x.qty > 0)) {
+          if (part.fromSupplier) await dec(tx, T, type.id, "VAZIO", part.qty, `Com o fornecedor (vazio) — ${size}`);
+          await inc(tx, H, type.id, "CHEIO", part.qty);
+          const m = await tx.stockMovement.create({ data: { operation: "ABASTECIMENTO", cylinderTypeId: type.id, quantity: part.qty,
+            fromLocationId: part.fromSupplier ? T : null, fromCondition: part.fromSupplier ? "VAZIO" : null, toLocationId: H, toCondition: "CHEIO",
+            occurredAt: i.occurredAt, responsibleName: i.responsibleName, notes: i.notes?.trim() || null,
+            requestKey: i.requestKey ? `${i.requestKey}|${size}|${n++}` : null, createdById: i.userId } });
+          if (i.receipt) await tx.receiptPhoto.create({ data: { movementId: m.id, url: i.receipt.url, pathname: i.receipt.pathname, contentType: i.receipt.contentType, size: i.receipt.size, uploadedById: i.userId } });
+        }
+        out.push({ size, quantity: q, settled });
+      }
+      return out;
+    });
+    await audit({ userId: i.userId, action: "ABASTECIMENTO_LOTE", entity: "StockMovement", after: { quantities: i.quantities, trocados: saved.map(x => ({ size: x.size, settled: x.settled })) } });
+    return { duplicate: false, saved };
+  } catch (e) {
+    if (isDup(e)) return { duplicate: true, saved: [] };
+    throw e;
+  }
 }
