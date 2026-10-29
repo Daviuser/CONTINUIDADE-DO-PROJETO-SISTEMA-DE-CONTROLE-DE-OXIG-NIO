@@ -454,3 +454,43 @@ export async function applySupplyBatch(i: SupplyBatchInput): Promise<{ duplicate
     throw e;
   }
 }
+
+// Envio de vazios ao fornecedor: uma movimentação por tamanho, aplicada atomicamente.
+export async function applySupplierSendBatch(i: Omit<SupplyBatchInput, "receipt">): Promise<{ duplicate: boolean }> {
+  const entries = (["P", "M", "G"] as const).map(size => [size, i.quantities[size] ?? 0] as const).filter(([, quantity]) => quantity > 0);
+  if (!entries.length) throw new StockError("Informe pelo menos uma quantidade maior que zero (P, M ou G).");
+  for (const [, quantity] of entries) if (!Number.isInteger(quantity) || quantity > 1_000_000) throw new StockError("Use apenas números inteiros positivos.");
+  if (i.requestKey && await db.stockMovement.findFirst({ where: { requestKey: { startsWith: i.requestKey + "|" } }, select: { id: true } })) return { duplicate: true };
+  try {
+    const saved = await db.$transaction(async tx => {
+      const [locs, types] = await Promise.all([
+        tx.location.findMany({ where: { code: { in: ["HOSPITAL", "TRANSPORTE"] } }, select: { id: true, code: true } }),
+        tx.cylinderType.findMany({ select: { id: true, size: true } }),
+      ]);
+      const hospital = locs.find(location => location.code === "HOSPITAL")?.id;
+      const transport = locs.find(location => location.code === "TRANSPORTE")?.id;
+      if (!hospital || !transport) throw new StockError("Localização não cadastrada (rode o seed).");
+      const movements: { size: CylinderSize; quantity: number; id: string }[] = [];
+      for (const [size, quantity] of entries) {
+        const type = types.find(cylinder => cylinder.size === size);
+        if (!type) throw new StockError("Tipo de cilindro não cadastrado (rode o seed).");
+        await dec(tx, hospital, type.id, "VAZIO", quantity, `Hospital (vazio) — ${size}`);
+        await inc(tx, transport, type.id, "VAZIO", quantity);
+        const movement = await tx.stockMovement.create({ data: {
+          operation: "ENVIO_FORNECEDOR", cylinderTypeId: type.id, quantity,
+          fromLocationId: hospital, fromCondition: "VAZIO", toLocationId: transport, toCondition: "VAZIO",
+          occurredAt: i.occurredAt, responsibleName: i.responsibleName, notes: i.notes?.trim() || null,
+          requestKey: i.requestKey ? `${i.requestKey}|${size}` : null, createdById: i.userId,
+        } });
+        movements.push({ size, quantity, id: movement.id });
+      }
+      return movements;
+    }, { isolationLevel: "Serializable" });
+    await audit({ userId: i.userId, action: "ENVIO_FORNECEDOR_LOTE", entity: "StockMovement", after: { quantities: Object.fromEntries(entries) } });
+    return { duplicate: false };
+  } catch (e) {
+    if (isDup(e)) return { duplicate: true };
+    if (serialFail(e)) throw new StockError("Outro usuário alterou o estoque neste instante. Tente salvar novamente.");
+    throw e;
+  }
+}

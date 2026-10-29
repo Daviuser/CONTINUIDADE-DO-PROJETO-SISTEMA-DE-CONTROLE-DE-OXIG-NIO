@@ -4,7 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { requireWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
-import { applyMovement, applySupplyBatch, reverseMovement, StockError, type MoveInput } from "@/lib/stock";
+import { applyMovement, applySupplierSendBatch, applySupplyBatch, reverseMovement, StockError, type MoveInput } from "@/lib/stock";
 import { saveReceipt, removeReceipt, type ReceiptMeta } from "@/lib/receipts";
 
 const base = z.object({
@@ -89,6 +89,29 @@ export async function registerCollection(fd: FormData) {
 
 export async function registerSupplierSend(fd: FormData) {
   return go(fd, none, async () => ({ operation: "ENVIO_FORNECEDOR", from: { loc: "HOSPITAL", cond: "VAZIO" }, to: { loc: "TRANSPORTE", cond: "VAZIO" } }));
+}
+
+export async function registerSupplierSendBatch(fd: FormData) {
+  const user = await requireWriter();
+  const fail = (m: string): never => redirect(`/trocas?erro=${encodeURIComponent(m)}`);
+  const p = supplyBase.safeParse(formObj(fd));
+  if (!p.success) return fail(p.error.issues[0].message);
+  if (p.data.occurredAt > todayStr()) return fail("A data não pode ser futura.");
+  const quantities: Partial<Record<"P" | "M" | "G", number>> = {};
+  for (const sz of ["P", "M", "G"] as const) {
+    const v = String(fd.get(`qty_${sz}`) ?? "").trim();
+    if (v === "") continue;
+    if (!/^\d+$/.test(v)) return fail(`Categoria ${sz}: use apenas números inteiros, sem decimais nem valores negativos.`);
+    const n = Number(v);
+    if (n > 100000) return fail(`Categoria ${sz}: quantidade muito alta.`);
+    if (n > 0) quantities[sz] = n;
+  }
+  if (!Object.keys(quantities).length) return fail("Informe pelo menos uma quantidade maior que zero (P, M ou G).");
+  let msg: string | null = null, dup = false;
+  try {
+    dup = (await applySupplierSendBatch({ quantities, occurredAt: parseDate(p.data.occurredAt), responsibleName: p.data.responsibleName, notes: p.data.notes, requestKey: p.data.requestKey, userId: user.id })).duplicate;
+  } catch (e) { if (e instanceof StockError) msg = e.message; else throw e; }
+  redirect(msg ? `/trocas?erro=${encodeURIComponent(msg)}` : `/trocas?ok=${dup ? "dup" : "1"}`);
 }
 
 export async function reverseCylinderMovement(fd: FormData) {

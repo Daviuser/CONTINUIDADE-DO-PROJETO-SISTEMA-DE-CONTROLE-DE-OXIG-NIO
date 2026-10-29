@@ -1,9 +1,12 @@
 import { requireUser } from "@/lib/auth";
-import { MoveForm, Flash } from "../_components/MoveForm";
+import { randomUUID } from "crypto";
+import { Flash } from "../_components/MoveForm";
+import { SupplierSendBatchForm } from "../_components/SupplierSendBatchForm";
 import { History } from "../_components/History";
 import { Stat } from "@/components/ui/Stat";
-import { registerSupplierSend } from "../estoque-actions";
+import { registerSupplierSendBatch } from "../estoque-actions";
 import { pendingBySize } from "@/lib/stock";
+import { todayStr } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +25,7 @@ export default async function Trocas({ searchParams }: { searchParams: Promise<R
           <Stat label="Total com o fornecedor" value={Math.max(0, total)} icon="box" />
         </div>
       </section>
-      {w && <MoveForm title="Enviar cilindros vazios ao fornecedor" action={registerSupplierSend} back="/trocas" userName={user.name} submit="Registrar envio" />}
+      {w && <SupplierSendBatchForm action={registerSupplierSendBatch} requestKey={randomUUID()} userName={user.name} today={todayStr()} />}
       <History title="Histórico de trocas" ops={["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"]} sp={sp} base="/trocas" canReverse={w} />
     </>
   );
