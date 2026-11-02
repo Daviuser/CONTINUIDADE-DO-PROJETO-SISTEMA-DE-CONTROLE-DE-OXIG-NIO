@@ -2,25 +2,28 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { put, get, del } from "@vercel/blob";
 import { StockError } from "./stock";
+import { RECEIPT_MAX_BYTES, validateReceiptBytes } from "./receipt-validation";
 
 export type ReceiptMeta = { url: string; pathname: string; contentType: string; size: number };
-export const RECEIPT_MAX_BYTES = 4 * 1024 * 1024; // limite de corpo das funções da Vercel é 4,5 MB
+export { RECEIPT_MAX_BYTES };
 
-// Confere o conteúdo real do arquivo (não confia só no tipo informado pelo navegador)
-function sniff(b: Buffer): { mime: string; ext: string } | null {
-  if (b.length > 12 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return { mime: "image/jpeg", ext: "jpg" };
-  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return { mime: "image/png", ext: "png" };
-  if (b.length > 12 && b.subarray(0, 4).toString("ascii") === "RIFF" && b.subarray(8, 12).toString("ascii") === "WEBP") return { mime: "image/webp", ext: "webp" };
-  return null;
-}
-
-// Envia ao Vercel Blob PRIVADO. Nome do arquivo gerado pelo servidor (nunca usa o nome enviado pelo usuário).
+// Uploads remain private; only server routes using the SDK can read them.
 export async function saveReceipt(file: File): Promise<ReceiptMeta> {
   if (file.size > RECEIPT_MAX_BYTES) throw new StockError("A foto do recibo passa de 4 MB. Escolha uma imagem menor.");
+  const hasReadWriteToken = Boolean(process.env.BLOB_READ_WRITE_TOKEN?.trim());
+  const hasOidcCredentials = Boolean(process.env.BLOB_STORE_ID?.trim() && (process.env.VERCEL_OIDC_TOKEN?.trim() || process.env.VERCEL === "1"));
+  if (!hasReadWriteToken && !hasOidcCredentials) {
+    throw new StockError("O armazenamento de recibos não está configurado. Defina BLOB_READ_WRITE_TOKEN nas variáveis de ambiente e tente novamente.");
+  }
+
   const buf = Buffer.from(await file.arrayBuffer());
-  const kind = sniff(buf);
-  if (!kind) throw new StockError("A foto do recibo deve ser uma imagem JPG, PNG ou WEBP.");
-  const blob = await put(`recibos/${new Date().getUTCFullYear()}/${randomUUID()}.${kind.ext}`, buf, { access: "private", contentType: kind.mime });
+  let kind: ReturnType<typeof validateReceiptBytes>;
+  try { kind = validateReceiptBytes(buf); }
+  catch (e) { if (e instanceof Error) throw new StockError(e.message); throw e; }
+  const blob = await put(`recibos/${new Date().getUTCFullYear()}/${randomUUID()}.${kind.ext}`, buf, {
+    access: "private",
+    contentType: kind.mime,
+  });
   return { url: blob.url, pathname: blob.pathname, contentType: kind.mime, size: buf.length };
 }
 
