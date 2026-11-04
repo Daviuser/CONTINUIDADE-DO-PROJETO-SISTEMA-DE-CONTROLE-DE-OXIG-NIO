@@ -36,7 +36,7 @@ export default async function Relatorios({ searchParams }: { searchParams: Promi
         <fieldset className="card grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
           <legend className="sr-only">Filtros</legend>
           <h2 className="border-b pb-3 sm:col-span-2 lg:col-span-4">2. Período e filtros <span className="text-xs font-normal text-slate-500">(aplicados quando fizerem sentido para o relatório; o inventário usa a posição atual)</span></h2>
-          <label className="text-sm">Data inicial<input type="date" name="from" defaultValue={sp.from ?? today.slice(0, 8) + "01"} max={today} className={inputCls} /></label>
+          <label className="text-sm">Data inicial<input type="date" name="from" defaultValue={sp.from && sp.from >= "2026-11-04" ? sp.from : "2026-11-04"} min="2026-11-04" max={today} className={inputCls} /></label>
           <label className="text-sm">Data final<input type="date" name="to" defaultValue={sp.to ?? today} max={today} className={inputCls} /></label>
           <label className="text-sm">Categoria de cilindro<select name="size" defaultValue={sp.size ?? ""} className={inputCls}><option value="">Todas</option>{SIZES.map(s => <option key={s} value={s}>{SIZE_LABEL[s]}</option>)}</select></label>
           <label className="text-sm">Responsável<input name="responsible" defaultValue={sp.responsible} placeholder="Nome (contém)" className={inputCls} /></label>
@@ -45,6 +45,7 @@ export default async function Relatorios({ searchParams }: { searchParams: Promi
             <label className="text-sm">Paciente<select name="patient" defaultValue={sp.patient ?? ""} className={inputCls}><option value="">Todos</option>{patients.map(p => <option key={p.id} value={p.id}>{p.fullName}</option>)}</select></label>
             <label className="text-sm">Bairro<input name="bairro" defaultValue={sp.bairro} className={inputCls} /></label>
             <label className="text-sm">Povoado<input name="povoado" defaultValue={sp.povoado} className={inputCls} /></label></>}
+          <p className="text-xs text-slate-500 sm:col-span-2 lg:col-span-4">Os relatórios operacionais consideram registros a partir de 04/11/2026 (horário de Brasília).</p>
           <div className="sm:col-span-2 lg:col-span-4"><button className="btn btn-primary"><Icon name="chart" className="h-4 w-4" />Gerar PDF</button></div>
         </fieldset>
       </form>

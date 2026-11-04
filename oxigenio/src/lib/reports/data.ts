@@ -2,7 +2,7 @@ import "server-only";
 import type { Prisma, Role, StockOperation } from "@prisma/client";
 import { db } from "@/lib/db";
 import { fmtDate, parseDate, todayStr, fmtDateTime } from "@/lib/format";
-import { cylinderSummary, flowmeterSummary, pendingBySize } from "@/lib/stock";
+import { cylinderSummary, flowmeterSummary } from "@/lib/stock";
 import { OP_LABEL, LOC_LABEL, COND_LABEL, FM_OP_LABEL, FM_LOC_LABEL, SIZE_LABEL, INTERNAL_LOCATIONS, INTERNAL_CODES, FM_KIND_LABEL, LOCAL_FLOW_OP_LABEL, MACHINE_KIND_SHORT, ALL_INTERNAL_LOCATIONS, LEGACY_CODES } from "@/lib/labels";
 import { REPORT_TYPES, type ReportParams } from "./params";
 import { receiptDataUrl } from "@/lib/receipts";
@@ -16,6 +16,9 @@ export type ReceiptItem = { caption: string; image?: string; note?: string };
 export type Report = { title: string; period: string; filters?: string; landscape?: boolean; blocks: Block[]; signatures: string[]; filename: string; receipts?: ReceiptItem[] };
 
 const LIMIT = 5000;
+// Início oficial da operação: meia-noite em America/Bahia (UTC-03:00).
+const OFFICIAL_START = "2026-11-04";
+const REPORT_TIME_ZONE_OFFSET = "T03:00:00.000Z";
 // Uma única assinatura em todos os documentos: o responsável pelo oxigênio
 const SIGNATURES = ["Responsável pelo oxigênio"];
 const ALL_OPS = Object.keys(OP_LABEL) as StockOperation[];
@@ -36,12 +39,15 @@ function filtersLabel(p: ReportParams) {
 }
 
 function dateFilter(p: ReportParams) {
-  return { ...(p.from ? { gte: parseDate(p.from) } : {}), ...(p.to ? { lte: parseDate(p.to) } : {}) };
+  const from = p.from && p.from > OFFICIAL_START ? p.from : OFFICIAL_START;
+  const through = p.to ? new Date(`${p.to}${REPORT_TIME_ZONE_OFFSET}`) : undefined;
+  if (through) through.setUTCDate(through.getUTCDate() + 1);
+  return { gte: new Date(`${from}${REPORT_TIME_ZONE_OFFSET}`), ...(through ? { lt: through } : {}) };
 }
 function stockWhere(p: ReportParams, ops: StockOperation[], validOnly: boolean): Prisma.StockMovementWhereInput {
   const w: Prisma.StockMovementWhereInput = { operation: { in: ops } };
   if (validOnly) { w.status = "CONFIRMADA"; w.reversalOfId = null; }
-  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  w.occurredAt = dateFilter(p);
   if (p.size) w.cylinderType = { size: p.size };
   if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
   if (p.supplier) w.supplier = { contains: p.supplier, mode: "insensitive" };
@@ -55,13 +61,13 @@ function stockWhere(p: ReportParams, ops: StockOperation[], validOnly: boolean):
 function flowWhere(p: ReportParams, validOnly: boolean): Prisma.FlowmeterMovementWhereInput {
   const w: Prisma.FlowmeterMovementWhereInput = {};
   if (validOnly) { w.status = "CONFIRMADA"; w.reversalOfId = null; }
-  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  w.occurredAt = dateFilter(p);
   if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
   return w;
 }
 function lfWhere(p: ReportParams): Prisma.FlowmeterLocationMovementWhereInput {
   const w: Prisma.FlowmeterLocationMovementWhereInput = {};
-  if (p.from || p.to) w.occurredAt = dateFilter(p);
+  w.occurredAt = dateFilter(p);
   if (p.responsible) w.responsibleName = { contains: p.responsible, mode: "insensitive" };
   if (p.local) w.OR = [{ fromLocation: { code: p.local } }, { toLocation: { code: p.local } }];
   return w;
@@ -100,7 +106,24 @@ async function inventoryBlocks(): Promise<Block[]> {
   ];
 }
 
+async function reportPendingBySize(p: ReportParams) {
+  const [sent, returned, settled, types] = await Promise.all([
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: stockWhere(p, ["ENVIO_FORNECEDOR"], true), _sum: { quantity: true } }),
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: stockWhere(p, ["RETORNO_FORNECEDOR"], true), _sum: { quantity: true } }),
+    db.stockMovement.groupBy({ by: ["cylinderTypeId"], where: { ...stockWhere(p, ["ABASTECIMENTO"], true), fromLocation: { code: "TRANSPORTE" } }, _sum: { quantity: true } }),
+    db.cylinderType.findMany({ orderBy: { size: "asc" } }),
+  ]);
+  const quantity = (rows: typeof sent, id: string) => rows.find(row => row.cylinderTypeId === id)?._sum.quantity ?? 0;
+  return types.map(type => {
+    const sentQty = quantity(sent, type.id);
+    const returnedQty = quantity(returned, type.id) + quantity(settled, type.id);
+    return { size: type.size, label: type.label, sent: sentQty, returned: returnedQty, pending: sentQty - returnedQty };
+  });
+}
+
 export async function buildReport(p: ReportParams, user: { role: Role; name: string }): Promise<Report> {
+  // O corte é imposto no servidor, inclusive quando a chamada não vem da interface.
+  p = { ...p, from: p.from && p.from > OFFICIAL_START ? p.from : OFFICIAL_START };
   const meta = REPORT_TYPES.find(t => t.id === p.type)!;
   if (meta.personal && user.role === "CONSULTA") throw new ReportError("Seu perfil não tem acesso a relatórios com dados pessoais de pacientes.", 403);
   const stamp = todayStr().replaceAll("-", "");
@@ -133,7 +156,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
   if (p.type === "trocas") {
     const [rows, pend] = await Promise.all([
       db.stockMovement.findMany({ where: stockWhere(p, ["ENVIO_FORNECEDOR", "RETORNO_FORNECEDOR"], true), orderBy: ORDER, take: LIMIT, include: { cylinderType: true, receipt: true } }),
-      pendingBySize()]);
+      reportPendingBySize(p)]);
     const pf = p.size ? pend.filter(x => x.size === p.size) : pend;
     return { ...base, title: "TROCAS DE CILINDROS COM O FORNECEDOR", filename: `trocas-fornecedor-${stamp}`,
       blocks: [
@@ -207,7 +230,7 @@ export async function buildReport(p: ReportParams, user: { role: Role; name: str
     inventoryBlocks(),
     db.stockMovement.groupBy({ by: ["operation"], where: stockWhere(p, ALL_OPS, true), _sum: { quantity: true }, _count: { _all: true } }),
     db.flowmeterMovement.groupBy({ by: ["operation"], where: flowWhere(p, true), _sum: { quantity: true }, _count: { _all: true } }),
-    pendingBySize(), db.patient.count({ where: { status: "ATIVO" } })]);
+    reportPendingBySize(p), db.patient.count({ where: { status: "ATIVO", startDate: { gte: new Date(`${OFFICIAL_START}${REPORT_TIME_ZONE_OFFSET}`) } } })]);
   const pf = pend.filter(x => x.pending !== 0);
   return { ...base, title: "RELATÓRIO CONSOLIDADO DO PERÍODO", filename: `consolidado-periodo-${stamp}`,
     blocks: [
