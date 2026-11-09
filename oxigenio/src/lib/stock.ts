@@ -15,6 +15,19 @@ type Tx = Prisma.TransactionClient;
 const isDup = (e: unknown) => e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
 const ptLabel = (loc: string, cond: string) => `${LOC_LABEL[loc]} (${COND_LABEL[cond].toLowerCase()})`;
 
+// Seed padroniza os locais iniciais; operações também garantem sua presença para
+// que uma base restaurada ou parcialmente sincronizada não impeça movimentações.
+async function ensureStandardLocations(tx: Tx) {
+  for (const location of [
+    { code: "HOSPITAL", name: "Hospital" },
+    { code: "DOMICILIO", name: "Domicílio" },
+    { code: "TRANSPORTE", name: "Em transporte/troca" },
+  ]) {
+    await tx.location.upsert({ where: { code: location.code }, update: {}, create: location });
+  }
+  return tx.location.findMany({ select: { id: true, code: true } });
+}
+
 // ---------- CILINDROS ----------
 async function dec(tx: Tx, locationId: string, cylinderTypeId: string, condition: StockCondition, qty: number, label: string) {
   const r = await tx.stockBalance.updateMany({ where: { locationId, cylinderTypeId, condition, quantity: { gte: qty } }, data: { quantity: { decrement: qty } } });
@@ -37,7 +50,7 @@ export async function applyMovement(i: MoveInput): Promise<{ duplicate: boolean 
   if (i.requestKey && (await db.stockMovement.findUnique({ where: { requestKey: i.requestKey }, select: { id: true } }))) return { duplicate: true };
   try {
     const m = await db.$transaction(async tx => {
-      const [locs, types] = await Promise.all([tx.location.findMany({ select: { id: true, code: true } }), tx.cylinderType.findMany({ select: { id: true, size: true } })]);
+      const [locs, types] = await Promise.all([ensureStandardLocations(tx), tx.cylinderType.findMany({ select: { id: true, size: true } })]);
       const L = (c: LocCode) => { const l = locs.find(x => x.code === c); if (!l) throw new StockError("Localização não cadastrada (rode o seed)."); return l.id; };
       const t = types.find(x => x.size === i.size); if (!t) throw new StockError("Tipo de cilindro não cadastrado (rode o seed).");
       if (i.from) await dec(tx, L(i.from.loc), t.id, i.from.cond, i.quantity, ptLabel(i.from.loc, i.from.cond) + ` — ${i.size}`);
