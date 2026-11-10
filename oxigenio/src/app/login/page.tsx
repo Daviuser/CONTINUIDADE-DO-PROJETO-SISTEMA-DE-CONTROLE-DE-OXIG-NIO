@@ -13,7 +13,7 @@ async function entrar(formData: FormData) {
   if (!p.success) redirect("/login?erro=1");
   const r = await login(p.data.username, p.data.password);
   if (!r.ok) redirect("/login?erro=" + encodeURIComponent(r.error));
-  redirect("/dashboard?bemvindo=1");
+  redirect(r.role === "OPERADOR" ? "/localizacao" : "/dashboard?bemvindo=1");
 }
 
 export default async function Login({ searchParams }: { searchParams: Promise<{ erro?: string }> }) {

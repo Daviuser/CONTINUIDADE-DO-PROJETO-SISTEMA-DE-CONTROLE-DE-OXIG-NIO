@@ -11,6 +11,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const text = (m: string, status: number) => new NextResponse(m, { status, headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
   const user = await getSession();
   if (!user) return text("Sessão expirada. Faça login novamente.", 401);
+  if (user.role === "OPERADOR") return text("Acesso negado.", 403);
   const { id } = await ctx.params;
   const r = await db.receiptPhoto.findUnique({ where: { id } });
   if (!r) return text("Recibo não encontrado.", 404);

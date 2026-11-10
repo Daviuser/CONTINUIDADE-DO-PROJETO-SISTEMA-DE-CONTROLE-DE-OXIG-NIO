@@ -14,6 +14,7 @@ const msg = (m: string, status: number) => new NextResponse(m, { status, headers
 export async function GET(req: NextRequest) {
   const user = await getSession(); // autenticação e perfil verificados no servidor
   if (!user) return msg("Sessão expirada. Faça login novamente.", 401);
+  if (user.role === "OPERADOR") return msg("Acesso negado.", 403);
   const parsed = paramsSchema.safeParse(Object.fromEntries(req.nextUrl.searchParams));
   if (!parsed.success) return msg(parsed.error.issues[0].message, 400);
   try {

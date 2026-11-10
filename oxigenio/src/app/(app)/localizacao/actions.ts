@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { LocalFlowOperation, StockOperation } from "@prisma/client";
 import { db } from "@/lib/db";
-import { requireWriter } from "@/lib/perm";
+import { requireLocationWriter } from "@/lib/perm";
 import { formObj, parseDate, todayStr } from "@/lib/format";
 import { applyMovement, applyLocalFlowMove, ensureInternalLocations, StockError, type Pt } from "@/lib/stock";
 import { INTERNAL_CODES, LEGACY_CODES, LEGACY_MSG } from "@/lib/labels";
@@ -24,7 +24,7 @@ const to = (rawCode: unknown, q: string): never => redirect(`${INTERNAL_CODES.in
 const fail = (rawCode: unknown, m: string): never => to(rawCode, `erro=${encodeURIComponent(m)}`);
 
 export async function registerLocationCylinderMove(fd: FormData) {
-  const user = await requireWriter();
+  const user = await requireLocationWriter();
   const raw = formObj(fd);
   const p = cylSchema.safeParse(raw);
   if (!p.success) return fail(raw.code, p.error.issues[0].message);
@@ -51,7 +51,7 @@ export async function registerLocationCylinderMove(fd: FormData) {
 }
 
 export async function registerLocationFlowmeterMove(fd: FormData) {
-  const user = await requireWriter();
+  const user = await requireLocationWriter();
   const raw = formObj(fd);
   const p = flowSchema.safeParse(raw);
   if (!p.success) return fail(raw.code, p.error.issues[0].message);

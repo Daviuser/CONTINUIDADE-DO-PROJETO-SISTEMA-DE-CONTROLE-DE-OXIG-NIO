@@ -1,2 +1,6 @@
 import { redirect } from "next/navigation";
-export default function Home() { redirect("/dashboard"); }
+import { getSession } from "@/lib/auth";
+export default async function Home() {
+  const user = await getSession();
+  redirect(user?.role === "OPERADOR" ? "/localizacao" : user ? "/dashboard" : "/login");
+}

@@ -1,10 +1,11 @@
 import "server-only";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createHash, randomBytes } from "crypto";
 import { verify } from "@node-rs/argon2";
 import { db } from "./db";
 import type { Role } from "@prisma/client";
+import { canAccessAppPath } from "./access-policy";
 
 const COOKIE = "sid";
 const IDLE_MIN = Number(process.env.SESSION_IDLE_MINUTES ?? 30);
@@ -30,7 +31,7 @@ export async function login(email: string, password: string) {
   (await cookies()).set(COOKIE, token, { httpOnly: true, secure: process.env.NODE_ENV === "production",
     sameSite: "lax", path: "/" });
   await db.auditLog.create({ data: { userId: user.id, action: "LOGIN", entity: "User", entityId: user.id } });
-  return { ok: true as const };
+  return { ok: true as const, role: user.role };
 }
 
 export async function getSession() {
@@ -66,6 +67,10 @@ export async function logout() {
 export async function requireUser(roles?: Role[]) {
   const user = await getSession();
   if (!user) redirect("/login");
-  if (roles && !roles.includes(user.role)) redirect("/dashboard?erro=permissao");
+  if (user.role === "OPERADOR") {
+    const pathname = (await headers()).get("x-app-pathname") ?? "";
+    if (!canAccessAppPath(user.role, pathname)) redirect("/localizacao?erro=permissao");
+  }
+  if (roles && !roles.includes(user.role)) redirect(user.role === "OPERADOR" ? "/localizacao?erro=permissao" : "/dashboard?erro=permissao");
   return user;
 }

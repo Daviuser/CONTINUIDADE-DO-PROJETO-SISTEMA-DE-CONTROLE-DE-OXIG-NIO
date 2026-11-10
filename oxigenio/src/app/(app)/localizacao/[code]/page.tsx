@@ -74,7 +74,7 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
           {machines.map(m => {
             const chips = MACHINE_KINDS.map(k => [k, m.items.find(i => i.kind === k)?.quantity ?? 0] as const).filter(([, n]) => n > 0);
             return (
-              <Link key={m.id} href={`/maquinas/${m.id}`} className="card block p-4 transition hover:shadow-md">
+              <Link key={m.id} href={user.role === "OPERADOR" ? `/localizacao/${code}` : `/maquinas/${m.id}`} className="card block p-4 transition hover:shadow-md">
                 <div className="flex items-start justify-between gap-2"><p className="font-display font-bold">{m.name}</p><span className={"badge " + (m.active ? "badge-ok" : "badge-muted")}>{m.active ? "Ativa" : "Inativa"}</span></div>
                 <p className="text-xs text-slate-500">{m.code ? `Ident.: ${m.code}` : "Sem identificação"}</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">{chips.map(([k, n]) => <span key={k} className="badge badge-muted">{MACHINE_KIND_SHORT[k]}: {n}</span>)}{!chips.length && <span className="text-xs text-slate-400">Sem itens associados</span>}</div>
