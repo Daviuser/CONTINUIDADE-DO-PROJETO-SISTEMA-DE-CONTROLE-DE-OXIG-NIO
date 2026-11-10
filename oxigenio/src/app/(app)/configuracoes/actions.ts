@@ -4,6 +4,7 @@ import { z } from "zod";
 import { db } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/perm";
+import { INTERNAL_CODES } from "@/lib/labels";
 
 const bad = (m: string): never => redirect(`/configuracoes?erro=${encodeURIComponent(m)}`);
 
@@ -34,7 +35,7 @@ export async function toggleLocation(fd: FormData) {
   const admin = await requireAdmin();
   const id = String(fd.get("id"));
   const l = await db.location.findUnique({ where: { id } });
-  if (!l || ["HOSPITAL", "DOMICILIO", "TRANSPORTE"].includes(l.code)) return bad("Localização padrão não pode ser desativada.");
+  if (!l || ["HOSPITAL", "DOMICILIO", "TRANSPORTE", ...INTERNAL_CODES].includes(l.code)) return bad("Localização padrão não pode ser desativada.");
   await db.location.update({ where: { id }, data: { active: !l.active } });
   await audit({ userId: admin.id, action: "LOCALIZACAO_ALTERADA", entity: "Location", entityId: id, before: { active: l.active }, after: { active: !l.active } });
   redirect("/configuracoes?ok=1");

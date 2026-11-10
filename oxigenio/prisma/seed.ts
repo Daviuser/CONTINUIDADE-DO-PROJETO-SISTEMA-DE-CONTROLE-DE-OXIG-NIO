@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { hash } from "@node-rs/argon2";
 const db = new PrismaClient();
 async function main() {
-  for (const [code, name] of [["HOSPITAL","Hospital"],["DOMICILIO","Domicílio"],["TRANSPORTE","Em transporte/troca"]])
+  for (const [code, name] of [["HOSPITAL","Hospital"],["DOMICILIO","Domicílio"],["TRANSPORTE","Em transporte/troca"],["AMBULANCIA","Ambulância"]])
     await db.location.upsert({ where:{code}, update:{}, create:{code,name} });
   for (const [size,label] of [["P","Pequeno (P)"],["M","Médio (M)"],["G","Grande (G)"]] as const)
     await db.cylinderType.upsert({ where:{size}, update:{}, create:{size,label} });
