@@ -116,6 +116,7 @@ model Location {
   id        String  @id @default(cuid())
   code      String  @unique
   name      String
+  plate     String?
   active    Boolean @default(true)
   balances  StockBalance[]
   movementsFrom StockMovement[] @relation("MovFrom")

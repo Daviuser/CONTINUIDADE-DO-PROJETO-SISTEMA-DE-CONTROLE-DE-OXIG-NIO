@@ -29,6 +29,6 @@ export function MoveForm({ title, action, back, userName, submit, noSize, notesL
 export function Flash({ erro, ok }: { erro?: string; ok?: string }) {
   return (<>
     {erro && <div role="alert" className="alert alert-error"><Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" />{erro}</div>}
-    {ok && <div role="status" className="alert alert-ok"><Icon name="check" className="mt-0.5 h-4 w-4 shrink-0" />{ok === "dup" ? "Esta operação já tinha sido registrada (não foi duplicada)." : ok === "estoque" ? "Estoque atualizado com sucesso." : ok === "nenhuma" ? "Nenhuma alteração: os valores são iguais aos atuais." : "Registrado com sucesso."}</div>}
+    {ok && <div role="status" className="alert alert-ok"><Icon name="check" className="mt-0.5 h-4 w-4 shrink-0" />{ok === "dup" ? "Esta operação já tinha sido registrada (não foi duplicada)." : ok === "estoque" ? "Estoque atualizado com sucesso." : ok === "nenhuma" ? "Nenhuma alteração: os valores são iguais aos atuais." : ok === "placa" ? "Placa da ambulância salva com sucesso." : "Registrado com sucesso."}</div>}
   </>);
 }

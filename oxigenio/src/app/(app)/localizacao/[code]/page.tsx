@@ -12,6 +12,7 @@ import { inputCls, btnCls } from "@/lib/ui";
 import { fmtDate, fmtDateTime, parseDate, okDate, todayStr } from "@/lib/format";
 import { ALL_INTERNAL_LOCATIONS, INTERNAL_CODES, LEGACY_CODES, LOC_LABEL, COND_LABEL, OP_LABEL, LOCAL_FLOW_OP_LABEL, FM_KIND_LABEL, SIZE_LABEL, SIZES, MACHINE_KINDS, MACHINE_KIND_SHORT } from "@/lib/labels";
 import { registerLocationCylinderMove, registerLocationFlowmeterMove } from "../actions";
+import { saveAmbulancePlate } from "../actions";
 
 export const dynamic = "force-dynamic";
 type Row = { at: Date; created: Date; kind: string; op: string; item: string; qty: number; route: string; who: string; notes: string };
@@ -54,6 +55,13 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
         <Link href="/localizacao" className="btn btn-secondary"><Icon name="arrowLeft" className="h-4 w-4" />Todos os locais</Link>
       </div>
       <Flash erro={sp.erro} ok={sp.ok} />
+      {code === "AMBULANCIA" && <section className="card space-y-3 p-4" aria-labelledby="h-placa">
+        <h2 id="h-placa">Placa da ambulância</h2>
+        <form action={saveAmbulancePlate} className="flex flex-wrap items-end gap-3">
+          <label className="min-w-56 flex-1 text-sm">Placa<input name="plate" defaultValue={loc.plate ?? ""} maxLength={10} placeholder="Ex.: ABC1D23" readOnly={!w} className={inputCls} /></label>
+          {w && <button className={btnCls}>Salvar placa</button>}
+        </form>
+      </section>}
       {LEGACY_CODES.includes(code) && <div className="alert alert-error" role="note"><Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" /><span>Este local guarda o <b>saldo anterior</b> de “Emergência e Estabilização”. Distribua-o usando <b>Transferir para outro local</b> (cilindros e fluxômetros) e, para máquinas, altere o local no cadastro. Ele não recebe novas entradas.</span></div>}
       <section className="space-y-3" aria-labelledby="h-cil">
         <h2 id="h-cil" className="text-xs font-semibold uppercase tracking-wider text-slate-500">Cilindros por tamanho e condição</h2>

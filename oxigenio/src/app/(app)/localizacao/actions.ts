@@ -1,5 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import type { LocalFlowOperation, StockOperation } from "@prisma/client";
 import { db } from "@/lib/db";
@@ -22,6 +23,18 @@ const flowSchema = z.object({ ...common, op: z.enum(["RECEBER_CENTRAL", "DEVOLVE
 
 const to = (rawCode: unknown, q: string): never => redirect(`${INTERNAL_CODES.includes(String(rawCode)) ? `/localizacao/${rawCode}` : "/localizacao"}?${q}`);
 const fail = (rawCode: unknown, m: string): never => to(rawCode, `erro=${encodeURIComponent(m)}`);
+
+export async function saveAmbulancePlate(fd: FormData) {
+  const user = await requireLocationWriter();
+  const plate = z.string().trim().max(10, "A placa deve ter no máximo 10 caracteres.").safeParse(fd.get("plate"));
+  if (!plate.success) return fail("AMBULANCIA", plate.error.issues[0].message);
+  const location = await db.location.findUnique({ where: { code: "AMBULANCIA" } });
+  if (!location) return fail("AMBULANCIA", "Localização da ambulância não encontrada.");
+  const normalized = plate.data.toUpperCase() || null;
+  await db.location.update({ where: { id: location.id }, data: { plate: normalized } });
+  revalidatePath("/localizacao/AMBULANCIA");
+  return to("AMBULANCIA", "ok=placa");
+}
 
 export async function registerLocationCylinderMove(fd: FormData) {
   const user = await requireLocationWriter();
