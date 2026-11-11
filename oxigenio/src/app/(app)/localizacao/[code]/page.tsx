@@ -21,19 +21,25 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
   const user = await requireUser(); const { code } = await params; const sp = await searchParams; const w = user.role !== "CONSULTA";
   if (!INTERNAL_CODES.includes(code)) notFound();
   const name = ALL_INTERNAL_LOCATIONS.find(l => l.code === code)!.name;
-  let loc = await db.location.findUnique({ where: { code } });
-  if (!loc) { await ensureInternalLocations(db); loc = await db.location.findUnique({ where: { code } }); }
+  // Select only fields needed by this page. In particular, avoid an implicit
+  // `SELECT *`: the optional ambulance plate column may not exist yet on a
+  // deployment that has received the app update before its migration.
+  let loc = await db.location.findUnique({ where: { code }, select: { id: true, code: true } });
+  if (!loc) { await ensureInternalLocations(db); loc = await db.location.findUnique({ where: { code }, select: { id: true, code: true } }); }
   if (!loc) notFound();
   const id = loc.id;
+  const ambulance = code === "AMBULANCIA"
+    ? await db.location.findUnique({ where: { code }, select: { plate: true } })
+    : null;
   const dateWhere = (okDate(sp.from) || okDate(sp.to)) ? { occurredAt: { ...(okDate(sp.from) ? { gte: parseDate(sp.from!) } : {}), ...(okDate(sp.to) ? { lte: parseDate(sp.to!) } : {}) } } : {};
   const ends = { OR: [{ fromLocationId: id }, { toLocationId: id }] };
   const [bal, fs, machines, sm, fl, rel] = await Promise.all([
     db.stockBalance.findMany({ where: { locationId: id }, include: { cylinderType: { select: { size: true } } } }),
     db.flowmeterStock.findMany({ where: { locationId: id } }),
     db.machine.findMany({ where: { locationId: id }, orderBy: { name: "asc" }, include: { items: true } }),
-    db.stockMovement.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { cylinderType: true, fromLocation: true, toLocation: true } }),
-    db.flowmeterLocationMovement.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { fromLocation: true, toLocation: true } }),
-    db.machineRelocation.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { machine: { select: { name: true } }, fromLocation: true, toLocation: true } }),
+    db.stockMovement.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { cylinderType: true, fromLocation: { select: { code: true } }, toLocation: { select: { code: true } } } }),
+    db.flowmeterLocationMovement.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { fromLocation: { select: { code: true } }, toLocation: { select: { code: true } } } }),
+    db.machineRelocation.findMany({ where: { ...ends, ...dateWhere }, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }], take: 100, include: { machine: { select: { name: true } }, fromLocation: { select: { code: true } }, toLocation: { select: { code: true } } } }),
   ]);
   const lab = (l?: { code: string } | null, fallback = "Estoque central") => (l ? (l.code === "HOSPITAL" ? "Estoque central" : LOC_LABEL[l.code] ?? l.code) : fallback);
   const q = (size: string, cond: string) => bal.filter(b => b.cylinderType.size === size && b.condition === cond).reduce((a, b) => a + b.quantity, 0);
@@ -58,7 +64,7 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
       {code === "AMBULANCIA" && <section className="card space-y-3 p-4" aria-labelledby="h-placa">
         <h2 id="h-placa">Placa da ambulância</h2>
         <form action={saveAmbulancePlate} className="flex flex-wrap items-end gap-3">
-          <label className="min-w-56 flex-1 text-sm">Placa<input name="plate" defaultValue={loc.plate ?? ""} maxLength={10} placeholder="Ex.: ABC1D23" readOnly={!w} className={inputCls} /></label>
+          <label className="min-w-56 flex-1 text-sm">Placa<input name="plate" defaultValue={ambulance?.plate ?? ""} maxLength={10} placeholder="Ex.: ABC1D23" readOnly={!w} className={inputCls} /></label>
           {w && <button className={btnCls}>Salvar placa</button>}
         </form>
       </section>}
