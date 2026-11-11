@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
@@ -28,9 +29,17 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
   if (!loc) { await ensureInternalLocations(db); loc = await db.location.findUnique({ where: { code }, select: { id: true, code: true } }); }
   if (!loc) notFound();
   const id = loc.id;
-  const ambulance = code === "AMBULANCIA"
-    ? await db.location.findUnique({ where: { code }, select: { plate: true } })
-    : null;
+  let ambulancePlate: string | null = null;
+  let plateColumnAvailable = true;
+  if (code === "AMBULANCIA") {
+    try {
+      ambulancePlate = (await db.location.findUnique({ where: { code }, select: { plate: true } }))?.plate ?? null;
+    } catch (error) {
+      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2022") throw error;
+      // Keep the location usable while a deployment is waiting for the plate migration.
+      plateColumnAvailable = false;
+    }
+  }
   const dateWhere = (okDate(sp.from) || okDate(sp.to)) ? { occurredAt: { ...(okDate(sp.from) ? { gte: parseDate(sp.from!) } : {}), ...(okDate(sp.to) ? { lte: parseDate(sp.to!) } : {}) } } : {};
   const ends = { OR: [{ fromLocationId: id }, { toLocationId: id }] };
   const [bal, fs, machines, sm, fl, rel] = await Promise.all([
@@ -63,10 +72,10 @@ export default async function LocalDetalhe({ params, searchParams }: { params: P
       <Flash erro={sp.erro} ok={sp.ok} />
       {code === "AMBULANCIA" && <section className="card space-y-3 p-4" aria-labelledby="h-placa">
         <h2 id="h-placa">Placa da ambulância</h2>
-        <form action={saveAmbulancePlate} className="flex flex-wrap items-end gap-3">
-          <label className="min-w-56 flex-1 text-sm">Placa<input name="plate" defaultValue={ambulance?.plate ?? ""} maxLength={10} placeholder="Ex.: ABC1D23" readOnly={!w} className={inputCls} /></label>
+        {plateColumnAvailable ? <form action={saveAmbulancePlate} className="flex flex-wrap items-end gap-3">
+          <label className="min-w-56 flex-1 text-sm">Placa<input name="plate" defaultValue={ambulancePlate ?? ""} maxLength={10} placeholder="Ex.: ABC1D23" readOnly={!w} className={inputCls} /></label>
           {w && <button className={btnCls}>Salvar placa</button>}
-        </form>
+        </form> : <p role="status" className="text-sm text-slate-500">O cadastro da placa estará disponível após a atualização do banco de dados.</p>}
       </section>}
       {LEGACY_CODES.includes(code) && <div className="alert alert-error" role="note"><Icon name="alert" className="mt-0.5 h-4 w-4 shrink-0" /><span>Este local guarda o <b>saldo anterior</b> de “Emergência e Estabilização”. Distribua-o usando <b>Transferir para outro local</b> (cilindros e fluxômetros) e, para máquinas, altere o local no cadastro. Ele não recebe novas entradas.</span></div>}
       <section className="space-y-3" aria-labelledby="h-cil">
