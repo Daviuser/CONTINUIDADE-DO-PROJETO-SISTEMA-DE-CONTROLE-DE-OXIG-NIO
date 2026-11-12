@@ -47,7 +47,13 @@ export async function registerLocationCylinderMove(fd: FormData) {
   let spec: { operation: StockOperation; from: Pt; to: Pt };
   switch (d.op) {
     case "RECEBER_CENTRAL": spec = { operation: "SAIDA_LOCAL", from: { loc: "HOSPITAL", cond: d.cond }, to: { loc: here, cond: d.cond } }; break;
-    case "DEVOLVER_CENTRAL": spec = { operation: "DEVOLUCAO_LOCAL", from: { loc: here, cond: d.cond }, to: { loc: "HOSPITAL", cond: d.cond } }; break;
+    case "DEVOLVER_CENTRAL": {
+      // O cilindro vazio estava registrado como cheio enquanto em uso no local.
+      // Ao devolvê-lo, consome o saldo cheio local e credita vazio no hospital.
+      const fromCondition = d.cond === "VAZIO" ? "CHEIO" : d.cond;
+      spec = { operation: "DEVOLUCAO_LOCAL", from: { loc: here, cond: fromCondition }, to: { loc: "HOSPITAL", cond: d.cond } };
+      break;
+    }
     case "TRANSFERIR": spec = { operation: "TRANSFERENCIA_LOCAL", from: { loc: here, cond: d.cond }, to: { loc: d.other!, cond: d.cond } }; break;
     case "RECEBER_OUTRO": spec = { operation: "TRANSFERENCIA_LOCAL", from: { loc: d.other!, cond: d.cond }, to: { loc: here, cond: d.cond } }; break;
     default:
