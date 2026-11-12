@@ -350,8 +350,20 @@ export async function applyMachineMovement(i: MachineMoveInput): Promise<{ dupli
 // ---------- 15 LOCAIS INTERNOS ----------
 // Garante as linhas em "Location" (idempotente: o código é único, nunca duplica).
 export async function ensureInternalLocations(client: Prisma.TransactionClient) {
-  for (const l of INTERNAL_LOCATIONS) await client.location.upsert({ where: { code: l.code }, update: {}, create: { code: l.code, name: l.name } });
-  return client.location.findMany({ where: { code: { in: INTERNAL_CODES } }, select: { id: true, code: true } });
+  // Cria em lote apenas os locais que ainda não existem. Isso evita 15 upserts
+  // sequenciais e reduz o tempo gasto dentro de transações interativas.
+  await client.location.createMany({
+    data: INTERNAL_LOCATIONS.map((location) => ({
+      code: location.code,
+      name: location.name,
+    })),
+    skipDuplicates: true,
+  });
+
+  return client.location.findMany({
+    where: { code: { in: INTERNAL_CODES } },
+    select: { id: true, code: true },
+  });
 }
 
 async function lfdec(tx: Tx, locationId: string, kind: FlowmeterKind, qty: number, label: string) {
@@ -397,7 +409,11 @@ export async function applyLocalFlowMove(i: LocalFlowInput): Promise<{ duplicate
         await tx.flowmeterMovement.create({ data: { ...base, operation: "LOCAL", quantity: q, toLocation: "HOSPITAL", notes: `Local: ${LOC_LABEL[i.fromCode!]} (devolução)` } });
       }
       await tx.flowmeterLocationMovement.create({ data: { ...base, operation: i.operation, kind: i.kind, quantity: q, fromLocationId: fromId, toLocationId: toId, notes: i.notes?.trim() || null, requestKey: i.requestKey ?? null } });
-    }, { isolationLevel: "Serializable" });
+    }, {
+      isolationLevel: "Serializable",
+      timeout: 15000,
+      maxWait: 10000,
+    });
     await audit({ userId: i.userId, action: "FLUXOMETRO_LOCAL_" + i.operation, entity: "FlowmeterStock", after: { kind: i.kind, quantity: i.quantity, from: i.fromCode, to: i.toCode } });
     return { duplicate: false };
   } catch (e) {
